@@ -15,23 +15,13 @@ var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (
 }) : function(o, v) {
     o["default"] = v;
 });
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("fs"));
 const fileContent = fs.readFileSync('src/example.ind', 'utf-8');
@@ -299,6 +289,117 @@ function treeToString(tree) {
     result += ')';
     return result;
 }
+// Convert expressions to human-readable mathematical notation
+function toMathString(input, parentPrecedence = 0) {
+    let tree;
+    // If input is a string, construct the tree first
+    if (typeof input === 'string') {
+        tree = constructTree(input);
+    }
+    else {
+        tree = input;
+    }
+    // Simplify the tree first (flatten constant additions)
+    tree = simplifyTree(tree);
+    // Skip root node
+    if (tree.value === "root") {
+        if (tree.children.length === 0) {
+            return "";
+        }
+        if (tree.children.length === 1) {
+            return toMathString(tree.children[0], parentPrecedence);
+        }
+    }
+    // Base case: no children, just return the value
+    if (tree.children.length === 0) {
+        return tree.value;
+    }
+    // Handle special wrapper nodes
+    if (tree.value === "Constant" || tree.value === "Variable") {
+        // Unwrap single-child wrappers
+        if (tree.children.length === 1) {
+            return toMathString(tree.children[0], parentPrecedence);
+        }
+    }
+    const operators = {
+        'Add': { symbol: ' + ', precedence: 1 },
+        'Sub': { symbol: ' - ', precedence: 1 },
+        'Mult': { symbol: ' * ', precedence: 2 },
+        'Div': { symbol: ' / ', precedence: 2 },
+        'Pow': { symbol: '^', precedence: 3 }
+    };
+    const opInfo = operators[tree.value];
+    // If it's a binary operator
+    if (opInfo && tree.children.length === 2) {
+        const left = toMathString(tree.children[0], opInfo.precedence);
+        const right = toMathString(tree.children[1], opInfo.precedence);
+        let result = `${left}${opInfo.symbol}${right}`;
+        // Add parentheses if this operator has lower precedence than parent
+        if (parentPrecedence > opInfo.precedence) {
+            result = `(${result})`;
+        }
+        return result;
+    }
+    // If it's a unary operator (e.g., Sqrt)
+    if (tree.value === "Sqrt" && tree.children.length === 1) {
+        const arg = toMathString(tree.children[0], 4);
+        return `√(${arg})`;
+    }
+    // Default: render as function call with arguments
+    let result = tree.value + '(';
+    for (let i = 0; i < tree.children.length; i++) {
+        result += toMathString(tree.children[i], 0);
+        if (i < tree.children.length - 1) {
+            result += ', ';
+        }
+    }
+    result += ')';
+    return result;
+}
+// Simplify tree by flattening constant additions and combining constants
+function simplifyTree(tree) {
+    if (tree.children.length === 0)
+        return tree;
+    // Recursively simplify children first
+    tree = {
+        value: tree.value,
+        children: tree.children.map(child => simplifyTree(child))
+    };
+    // Helper to extract numeric value from a Constant tree
+    function getConstantValue(t) {
+        if (t.value === "Constant" && t.children.length === 1) {
+            const val = parseInt(t.children[0].value);
+            if (!isNaN(val))
+                return val;
+        }
+        return null;
+    }
+    // If this is Add with Constant children, try to combine them
+    if (tree.value === "Add" && tree.children.length === 2) {
+        const left = tree.children[0];
+        const right = tree.children[1];
+        const rightVal = getConstantValue(right);
+        // If right is a constant and left is Add(..., Constant(a)), combine the constants
+        if (rightVal !== null && left.value === "Add" && left.children.length === 2) {
+            const leftRightVal = getConstantValue(left.children[1]);
+            if (leftRightVal !== null) {
+                const combined = leftRightVal + rightVal;
+                const newConst = {
+                    value: "Constant",
+                    children: [{
+                            value: String(combined),
+                            children: []
+                        }]
+                };
+                return {
+                    value: "Add",
+                    children: [left.children[0], newConst]
+                };
+            }
+        }
+    }
+    return tree;
+}
 function applyAllRelations(node) {
     let results = [];
     for (const relation of relations) {
@@ -347,21 +448,64 @@ function resolveSubstitutions(node) {
     }
     return node;
 }
+function substitute(tree, target, replacement) {
+    let treeString = treeToString(tree);
+    let regex = new RegExp(`\\b${target}\\b`, 'g');
+    treeString = treeString.replace(regex, replacement);
+    return constructTree(treeString);
+}
 const expr = "Sum(k,1,Add(Variable(n),Constant(1)))";
 let rootExpr = constructTree(expr);
 if (rootExpr.value === "root" && rootExpr.children.length > 0) {
     rootExpr = rootExpr.children[0];
 }
+let targetExpr = constructTree(inductionHypothesis.split('=')[1].trim());
+console.log("Target Expression before substitution:");
+printTree(targetExpr);
+if (targetExpr.value === "root" && targetExpr.children.length > 0) {
+    targetExpr = targetExpr.children[0];
+}
+targetExpr = substitute(targetExpr, "n", "Add(n,Constant(1))");
+console.log("Target Expression after substitution:");
+printTree(targetExpr);
 // Create a separate tree for tracking derivations (not the parse tree)
 let derivationTree = {
     value: rootExpr,
     children: []
 };
 let frontier = [derivationTree];
-for (let i = 0; i < 3; i++) {
+// Extract the right-hand side of the induction hypothesis
+const [hypLeft, hypRightOriginal] = inductionHypothesis.split('=').map((s) => s.trim());
+// Substitute n with n+1 in the hypothesis RHS
+const hypRightTree = constructTree(hypRightOriginal);
+const hypRightSubstituted = substitute(hypRightTree, "n", "Add(n,Constant(1))");
+const hypRight = treeToString(hypRightSubstituted);
+const hypRightMath = toMathString(hypRightSubstituted);
+console.log("\n=== Induction Hypothesis Goal ===");
+console.log("Original RHS: " + hypRightOriginal);
+console.log("After substitution (structure): " + hypRight);
+console.log("After substitution (math): " + hypRightMath);
+console.log("===================================\n");
+// Normalize math strings by removing spacing differences and simplifying additions like (n+1+1) to (n+2)
+function normalizeMathString(math) {
+    let result = math;
+    // Replace patterns like (n + 1 + 1) with (n + 2)
+    result = result.replace(/\(n \+ 1 \+ 1\)/g, "(n + 2)");
+    return result;
+}
+for (let i = 0; i < 5; i++) {
     let nextFrontier = [];
     for (const node of frontier) {
         const exprStr = treeToString(node.value);
+        const exprMath = toMathString(node.value);
+        const normExprMath = normalizeMathString(exprMath);
+        const normHypMath = normalizeMathString(hypRightMath);
+        // Check if we've reached the induction hypothesis RHS (by comparing normalized math notation)
+        if (normExprMath === normHypMath) {
+            console.log("✓ Reached induction hypothesis goal!");
+            frontier = [];
+            break;
+        }
         const derived = applyAllRelations(exprStr);
         for (const result of derived) {
             const normalized = resolveSubstitutions(result);
@@ -369,6 +513,21 @@ for (let i = 0; i < 3; i++) {
             const child = (childTree.value === "root" && childTree.children.length > 0)
                 ? childTree.children[0]
                 : childTree;
+            // Check if this result matches the hypothesis goal
+            const childStr = treeToString(child);
+            const childMath = toMathString(child);
+            const normChildMath = normalizeMathString(childMath);
+            if (normChildMath === normHypMath) {
+                console.log("✓ Reached induction hypothesis goal!");
+                const derivNode = {
+                    value: child,
+                    children: []
+                };
+                node.children.push(derivNode);
+                nextFrontier = []; // Stop exploring further
+                frontier = [];
+                break;
+            }
             const derivNode = {
                 value: child,
                 children: []
@@ -376,14 +535,18 @@ for (let i = 0; i < 3; i++) {
             node.children.push(derivNode);
             nextFrontier.push(derivNode);
         }
+        if (frontier.length === 0)
+            break;
     }
     frontier = nextFrontier;
+    if (frontier.length === 0)
+        break;
 }
 // Display function for derivation tree
 function displayDerivationTree(node, depth = 0) {
     const indent = '  '.repeat(depth);
-    const exprStr = treeToString(node.value);
-    console.log(indent + exprStr);
+    const mathStr = toMathString(node.value);
+    console.log(indent + mathStr);
     for (const child of node.children) {
         displayDerivationTree(child, depth + 1);
     }

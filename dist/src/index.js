@@ -209,7 +209,20 @@ function putVariables(template, variableMap) {
         let regex = new RegExp(`\\b${key}\\b`, 'g');
         result = result.replace(regex, value);
     }
-    return result;
+    // Resolve substitutions: a\Func(...) means Func(...) with a substituted in
+    // For now, we'll simplify: a\Func(...) -> Func(...) since the substitution
+    // doesn't affect the function if the function doesn't reference the variable
+    let resolved = result;
+    while (resolved.includes('\\')) {
+        const subMatch = resolved.match(/(\w+)\\(\w+\([^)]*\))/);
+        if (!subMatch)
+            break;
+        const fullMatch = subMatch[0]; // e.g., "k\Add(n,Constant(1))"
+        const funcPart = subMatch[2]; // e.g., "Add(n,Constant(1))"
+        // Replace the whole substitution with just the function part
+        resolved = resolved.replace(fullMatch, funcPart);
+    }
+    return resolved;
 }
 function cloneTree(tree) {
     return {
@@ -286,6 +299,122 @@ function treeToString(tree) {
     result += ')';
     return result;
 }
+// Convert expressions to human-readable mathematical notation
+function toMathString(input, parentPrecedence = 0) {
+    let tree;
+    // If input is a string, construct the tree first
+    if (typeof input === 'string') {
+        tree = constructTree(input);
+    }
+    else {
+        tree = input;
+    }
+    // Simplify the tree first (flatten constant additions)
+    tree = simplifyTree(tree);
+    // Skip root node
+    if (tree.value === "root") {
+        if (tree.children.length === 0) {
+            return "";
+        }
+        if (tree.children.length === 1) {
+            return toMathString(tree.children[0], parentPrecedence);
+        }
+    }
+    // Base case: no children, just return the value
+    if (tree.children.length === 0) {
+        return tree.value;
+    }
+    // Handle special wrapper nodes
+    if (tree.value === "Constant" || tree.value === "Variable") {
+        // Unwrap single-child wrappers
+        if (tree.children.length === 1) {
+            return toMathString(tree.children[0], parentPrecedence);
+        }
+    }
+    const operators = {
+        'Add': { symbol: ' + ', precedence: 1 },
+        'Sub': { symbol: ' - ', precedence: 1 },
+        'Mult': { symbol: ' * ', precedence: 2 },
+        'Div': { symbol: ' / ', precedence: 2 },
+        'Pow': { symbol: '^', precedence: 3 }
+    };
+    const opInfo = operators[tree.value];
+    // If it's a binary operator
+    if (opInfo && tree.children.length === 2) {
+        const left = toMathString(tree.children[0], opInfo.precedence);
+        const right = toMathString(tree.children[1], opInfo.precedence);
+        let result = `${left}${opInfo.symbol}${right}`;
+        // Add parentheses if this operator has lower precedence than parent
+        if (parentPrecedence > opInfo.precedence) {
+            result = `(${result})`;
+        }
+        return result;
+    }
+    // If it's a unary operator (e.g., Sqrt)
+    if (tree.value === "Sqrt" && tree.children.length === 1) {
+        const arg = toMathString(tree.children[0], 4);
+        return `√(${arg})`;
+    }
+    // Default: render as function call with arguments
+    let result = tree.value + '(';
+    for (let i = 0; i < tree.children.length; i++) {
+        result += toMathString(tree.children[i], 0);
+        if (i < tree.children.length - 1) {
+            result += ', ';
+        }
+    }
+    result += ')';
+    return result;
+}
+// Simplify tree by flattening constant additions and combining constants
+function simplifyTree(tree) {
+    if (tree.children.length === 0)
+        return tree;
+    // Recursively simplify children first
+    tree = {
+        value: tree.value,
+        children: tree.children.map(child => simplifyTree(child))
+    };
+    // Helper to extract numeric value from a Constant tree
+    function getConstantValue(t) {
+        if (t.value === "Constant" && t.children.length === 1) {
+            const val = parseInt(t.children[0].value);
+            if (!isNaN(val))
+                return val;
+        }
+        return null;
+    }
+    // If this is Add with Constant children, try to combine them
+    if (tree.value === "Add" && tree.children.length === 2) {
+        const left = tree.children[0];
+        const right = tree.children[1];
+        const rightVal = getConstantValue(right);
+        if (rightVal !== null) {
+            console.log("DEBUG Add: rightVal=" + rightVal + ", left.value=" + left.value);
+        }
+        // If right is a constant and left is Add(..., Constant(a)), combine the constants
+        if (rightVal !== null && left.value === "Add" && left.children.length === 2) {
+            const leftRightVal = getConstantValue(left.children[1]);
+            console.log("DEBUG checking leftRightVal=" + leftRightVal);
+            if (leftRightVal !== null) {
+                const combined = leftRightVal + rightVal;
+                const newConst = {
+                    value: "Constant",
+                    children: [{
+                            value: String(combined),
+                            children: []
+                        }]
+                };
+                console.log("DEBUG: Simplified to Constant(" + combined + ")");
+                return {
+                    value: "Add",
+                    children: [left.children[0], newConst]
+                };
+            }
+        }
+    }
+    return tree;
+}
 function applyAllRelations(node) {
     let results = [];
     for (const relation of relations) {
@@ -334,21 +463,56 @@ function resolveSubstitutions(node) {
     }
     return node;
 }
+function substitute(tree, target, replacement) {
+    let treeString = treeToString(tree);
+    let regex = new RegExp(`\\b${target}\\b`, 'g');
+    treeString = treeString.replace(regex, replacement);
+    return constructTree(treeString);
+}
 const expr = "Sum(k,1,Add(Variable(n),Constant(1)))";
 let rootExpr = constructTree(expr);
 if (rootExpr.value === "root" && rootExpr.children.length > 0) {
     rootExpr = rootExpr.children[0];
 }
+let targetExpr = constructTree(inductionHypothesis.split('=')[1].trim());
+console.log("Target Expression before substitution:");
+printTree(targetExpr);
+if (targetExpr.value === "root" && targetExpr.children.length > 0) {
+    targetExpr = targetExpr.children[0];
+}
+targetExpr = substitute(targetExpr, "Variable(n)", "Add(Variable(n),Constant(1))");
+console.log("Target Expression after substitution:");
+printTree(targetExpr);
 // Create a separate tree for tracking derivations (not the parse tree)
 let derivationTree = {
     value: rootExpr,
     children: []
 };
 let frontier = [derivationTree];
-for (let i = 0; i < 3; i++) {
+// Extract the right-hand side of the induction hypothesis
+const [hypLeft, hypRightOriginal] = inductionHypothesis.split('=').map((s) => s.trim());
+// Substitute n with n+1 in the hypothesis RHS
+const hypRightTree = constructTree(hypRightOriginal);
+const hypRightSubstituted = substitute(hypRightTree, "n", "Add(n,Constant(1))");
+const hypRight = treeToString(hypRightSubstituted);
+const hypRightMath = toMathString(hypRightSubstituted);
+console.log("\n=== Induction Hypothesis Goal ===");
+console.log("Original RHS: " + hypRightOriginal);
+console.log("After substitution (structure): " + hypRight);
+console.log("After substitution (math): " + hypRightMath);
+console.log("===================================\n");
+for (let i = 0; i < 5; i++) {
     let nextFrontier = [];
     for (const node of frontier) {
         const exprStr = treeToString(node.value);
+        const exprMath = toMathString(node.value);
+        // Check if we've reached the induction hypothesis RHS (by comparing math notation)
+        console.log("Checking math: '" + exprMath + "' vs goal: '" + hypRightMath + "' -> " + (exprMath === hypRightMath));
+        if (exprMath === hypRightMath) {
+            console.log("✓ Reached induction hypothesis goal!");
+            frontier = [];
+            break;
+        }
         const derived = applyAllRelations(exprStr);
         for (const result of derived) {
             const normalized = resolveSubstitutions(result);
@@ -356,6 +520,21 @@ for (let i = 0; i < 3; i++) {
             const child = (childTree.value === "root" && childTree.children.length > 0)
                 ? childTree.children[0]
                 : childTree;
+            // Check if this result matches the hypothesis goal
+            const childStr = treeToString(child);
+            const childMath = toMathString(child);
+            console.log("  Derived math: '" + childMath + "' vs goal: '" + hypRightMath + "' -> " + (childMath === hypRightMath));
+            if (childMath === hypRightMath) {
+                console.log("✓ Reached induction hypothesis goal!");
+                const derivNode = {
+                    value: child,
+                    children: []
+                };
+                node.children.push(derivNode);
+                nextFrontier = []; // Stop exploring further
+                frontier = [];
+                break;
+            }
             const derivNode = {
                 value: child,
                 children: []
@@ -363,14 +542,18 @@ for (let i = 0; i < 3; i++) {
             node.children.push(derivNode);
             nextFrontier.push(derivNode);
         }
+        if (frontier.length === 0)
+            break;
     }
     frontier = nextFrontier;
+    if (frontier.length === 0)
+        break;
 }
 // Display function for derivation tree
 function displayDerivationTree(node, depth = 0) {
     const indent = '  '.repeat(depth);
-    const exprStr = treeToString(node.value);
-    console.log(indent + exprStr);
+    const mathStr = toMathString(node.value);
+    console.log(indent + mathStr);
     for (const child of node.children) {
         displayDerivationTree(child, depth + 1);
     }
