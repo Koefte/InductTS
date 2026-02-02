@@ -1,0 +1,11 @@
+
+
+relations:
+
+Sum(body,from,Add(Variable(n),Constant(1))) = Add(Sum(body,from,n), body\Add(n,Constant(1))) 
+Add(Div(a,b),c) = Div(Add(a,Mult(b,c)),c)
+Add(Mult(a,b),Mult(c,a)) = Mult(a,Add(b,c))
+
+induction_hypothesis:
+
+Sum(body,Constant(1),Variable(n)) = Div(Mult(n,Add(n,Constant(1))),Constant(0.5))
