@@ -202,7 +202,23 @@ function putVariables(template:string, variableMap: VariableMap) : string {
         let regex = new RegExp(`\\b${key}\\b`, 'g');
         result = result.replace(regex, value);
     }
-    return result;
+    
+    // Resolve substitutions: a\Func(...) means Func(...) with a substituted in
+    // For now, we'll simplify: a\Func(...) -> Func(...) since the substitution
+    // doesn't affect the function if the function doesn't reference the variable
+    let resolved = result;
+    while(resolved.includes('\\')){
+        const subMatch = resolved.match(/(\w+)\\(\w+\([^)]*\))/);
+        if(!subMatch) break;
+        
+        const fullMatch = subMatch[0];  // e.g., "k\Add(n,Constant(1))"
+        const funcPart = subMatch[2];   // e.g., "Add(n,Constant(1))"
+        
+        // Replace the whole substitution with just the function part
+        resolved = resolved.replace(fullMatch, funcPart);
+    }
+    
+    return resolved;
 }
 
 function cloneTree(tree: Tree<string>) : Tree<string> {
@@ -212,12 +228,12 @@ function cloneTree(tree: Tree<string>) : Tree<string> {
     };
 }
 
-function applyInductionHypothesis(nodeTree:Tree<string>) : string {
-    if(!inductionHypothesis){
+function applyRelation(nodeTree:Tree<string>,relation:string) : string {
+    if(!relation){
         return treeToString(nodeTree);
     }
     
-    const [left, right] = inductionHypothesis.split('=').map((s:string) => s.trim());
+    const [left, right] = relation.split('=').map((s:string) => s.trim());
     if(!left || !right){
         return treeToString(nodeTree);
     }
@@ -292,20 +308,16 @@ function treeToString(tree: Tree<string>) : string {
 
 function applyAllRelations(node: string) : string[] {
     let results: string[] = [];
-    let nodeTree = constructTree(node);
     for (const relation of relations) {
-        const [left, right] = relation.split('=').map((s:string) => s.trim());
-        let leftTree = constructTree(left)
-        try{
-            
-            results.push(putVariables(right, matches(cloneTree(nodeTree), cloneTree(leftTree))));
-        }
-        catch(e){
-            // Ignore errors
+        let nodeTree = constructTree(node);
+        const applyResult = applyRelation(nodeTree,relation);
+        if(applyResult && applyResult != node){
+            results.push(applyResult)
         }
     }
     
-    const hypResult = applyInductionHypothesis(nodeTree);
+    let nodeTree = constructTree(node);
+    const hypResult = applyRelation(nodeTree,inductionHypothesis);
     if(hypResult && hypResult != node){
         results.push(hypResult);
     }

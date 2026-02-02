@@ -209,20 +209,7 @@ function putVariables(template, variableMap) {
         let regex = new RegExp(`\\b${key}\\b`, 'g');
         result = result.replace(regex, value);
     }
-    // Resolve substitutions: a\Func(...) means Func(...) with a substituted in
-    // For now, we'll simplify: a\Func(...) -> Func(...) since the substitution
-    // doesn't affect the function if the function doesn't reference the variable
-    let resolved = result;
-    while (resolved.includes('\\')) {
-        const subMatch = resolved.match(/(\w+)\\(\w+\([^)]*\))/);
-        if (!subMatch)
-            break;
-        const fullMatch = subMatch[0]; // e.g., "k\Add(n,Constant(1))"
-        const funcPart = subMatch[2]; // e.g., "Add(n,Constant(1))"
-        // Replace the whole substitution with just the function part
-        resolved = resolved.replace(fullMatch, funcPart);
-    }
-    return resolved;
+    return result;
 }
 function cloneTree(tree) {
     return {
