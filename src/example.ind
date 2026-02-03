@@ -4,11 +4,14 @@ relations:
 
 Sum(body,from,Add(Variable(n),Constant(1))) = Add(Sum(body,from,n), body\Add(n,Constant(1))) 
 Add(Div(a,b),c) = Div(Add(a,Mult(b,c)),b)
+Add(Div(Mult(a,b),c),a) = Div(Add(Mult(a,b),Mult(b,c)),c)
+Add(Mult(a,b),Mult(b,c)) = Mult(b,Add(a,c))
 Add(Mult(a,b),Mult(c,b)) = Mult(b,Add(a,c))
 Add(Div(a,b),Div(c,d)) = Div(Add(Mult(a,d),Mult(b,c)),Mult(b,d))
 Mult(a,Add(b,c)) = Add(Mult(a,b),Mult(a,c))
 Mult(Add(b,c),a) = Add(Mult(b,a),Mult(c,a))
-Add(Mult(a,a),Add(Mult(a,2),Constant(1))) = Mult(Add(a,Constant(1)),Add(a,Constant(1)))
+Add(Mult(a,a),Add(Mult(a,Constant(2)),Constant(1))) = Mult(Add(a,Constant(1)),Add(a,Constant(1)))
+Add(Div(Mult(Mult(a, b), c), d), Mult(b, b)) = Div(Mult(b, Add(Mult(a, c), Mult(b, d))), d)
 
 induction_hypothesis:
 

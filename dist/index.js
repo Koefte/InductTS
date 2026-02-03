@@ -15,47 +15,40 @@ var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (
 }) : function(o, v) {
     o["default"] = v;
 });
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.toLatexString = exports.runInduction = exports.parseInductionInput = void 0;
 const fs = __importStar(require("fs"));
-const fileContent = fs.readFileSync('src/example.ind', 'utf-8');
-const statements = fileContent.split('\n').filter(line => line.trim() !== '');
-const types = [];
-const relations = [];
-let inductionHypothesis = "";
-let currentSegment = "";
-for (const statement of statements) {
-    if (statement == "relations:") {
-        currentSegment = "relations";
-        continue;
+function parseInductionInput(fileContent) {
+    const statements = fileContent.split('\n').filter(line => line.trim() !== '');
+    const relations = [];
+    let inductionHypothesis = "";
+    let currentSegment = "";
+    for (const statement of statements) {
+        if (statement == "relations:") {
+            currentSegment = "relations";
+            continue;
+        }
+        if (statement == "induction_hypothesis:") {
+            currentSegment = "induction_hypothesis";
+            continue;
+        }
+        if (currentSegment == "relations") {
+            relations.push(statement);
+        }
+        if (currentSegment == "induction_hypothesis") {
+            inductionHypothesis = statement;
+        }
     }
-    if (statement == "induction_hypothesis:") {
-        currentSegment = "induction_hypothesis";
-        continue;
-    }
-    if (currentSegment == "relations") {
-        relations.push(statement);
-    }
-    if (currentSegment == "induction_hypothesis") {
-        inductionHypothesis = statement;
-    }
+    return { relations, inductionHypothesis };
 }
+exports.parseInductionInput = parseInductionInput;
 var TokenType;
 (function (TokenType) {
     TokenType[TokenType["Call"] = 0] = "Call";
@@ -217,11 +210,58 @@ function matches(nodeTree, patternTree) {
         throw new Error("Child length mismatch");
     }
     // Recursively match children
+    // For commutative operations (Mult, Add), try all permutations
+    if ((nodeTree.value === "Mult" || nodeTree.value === "Add") && nodeTree.children.length === 2) {
+        try {
+            // Try original order first
+            const map1 = new Map();
+            const child0Match = matches(nodeTree.children[0], patternTree.children[0]);
+            for (const [key, value] of child0Match.entries()) {
+                map1.set(key, value);
+            }
+            const child1Match = matches(nodeTree.children[1], patternTree.children[1]);
+            for (const [key, value] of child1Match.entries()) {
+                // Check for conflicts
+                if (map1.has(key) && map1.get(key) !== value) {
+                    throw new Error(`Variable binding conflict: ${key} cannot be both ${map1.get(key)} and ${value}`);
+                }
+                map1.set(key, value);
+            }
+            return map1;
+        }
+        catch (e1) {
+            // Try swapped order
+            try {
+                const map2 = new Map();
+                const child0Match = matches(nodeTree.children[0], patternTree.children[1]);
+                for (const [key, value] of child0Match.entries()) {
+                    map2.set(key, value);
+                }
+                const child1Match = matches(nodeTree.children[1], patternTree.children[0]);
+                for (const [key, value] of child1Match.entries()) {
+                    // Check for conflicts
+                    if (map2.has(key) && map2.get(key) !== value) {
+                        throw new Error(`Variable binding conflict: ${key} cannot be both ${map2.get(key)} and ${value}`);
+                    }
+                    map2.set(key, value);
+                }
+                return map2;
+            }
+            catch (e2) {
+                throw e1; // Throw original error if both fail
+            }
+        }
+    }
+    // Non-commutative: match children in order
     for (let i = 0; i < nodeTree.children.length; i++) {
         let nodeChild = nodeTree.children[i];
         let patternChild = patternTree.children[i];
         const childMatches = matches(nodeChild, patternChild);
         for (const [key, value] of childMatches.entries()) {
+            // Check for conflicts
+            if (variableMap.has(key) && variableMap.get(key) !== value) {
+                throw new Error(`Variable binding conflict: ${key} cannot be both ${variableMap.get(key)} and ${value}`);
+            }
             variableMap.set(key, value);
         }
     }
@@ -407,6 +447,74 @@ function toMathString(input, parentPrecedence = 0) {
     result += ')';
     return result;
 }
+// Convert expressions to LaTeX notation
+function toLatexString(input, parentPrecedence = 0) {
+    let tree;
+    if (typeof input === 'string') {
+        tree = constructTree(input);
+    }
+    else {
+        tree = input;
+    }
+    tree = simplifyTree(tree);
+    if (tree.value === "root") {
+        if (tree.children.length === 0) {
+            return "";
+        }
+        if (tree.children.length === 1) {
+            return toLatexString(tree.children[0], parentPrecedence);
+        }
+    }
+    if (tree.children.length === 0) {
+        return tree.value;
+    }
+    if (tree.value === "Constant" || tree.value === "Variable") {
+        if (tree.children.length === 1) {
+            return toLatexString(tree.children[0], parentPrecedence);
+        }
+    }
+    if (tree.value === "Sum" && tree.children.length === 3) {
+        const body = toLatexString(tree.children[0], 0);
+        const from = toLatexString(tree.children[1], 0);
+        const to = toLatexString(tree.children[2], 0);
+        return `\\sum_{${from}}^{${to}} ${body}`;
+    }
+    const operators = {
+        'Add': { symbol: ' + ', precedence: 1 },
+        'Sub': { symbol: ' - ', precedence: 1 },
+        'Subtract': { symbol: ' - ', precedence: 1 },
+        'Mult': { symbol: ' \\cdot ', precedence: 2 },
+        'Div': { symbol: '/', precedence: 2, latex: true },
+        'Pow': { symbol: '^', precedence: 3, latex: true }
+    };
+    const opInfo = operators[tree.value];
+    if (opInfo && tree.children.length === 2) {
+        const left = toLatexString(tree.children[0], opInfo.precedence);
+        const right = toLatexString(tree.children[1], opInfo.precedence);
+        if (tree.value === 'Div') {
+            return `\\frac{${left}}{${right}}`;
+        }
+        if (tree.value === 'Pow') {
+            const base = parentPrecedence > opInfo.precedence ? `\\left(${left}\\right)` : left;
+            return `${base}^{${right}}`;
+        }
+        let result = `${left}${opInfo.symbol}${right}`;
+        if (parentPrecedence > opInfo.precedence) {
+            result = `\\left(${result}\\right)`;
+        }
+        return result;
+    }
+    let result = tree.value + '\\left(';
+    for (let i = 0; i < tree.children.length; i++) {
+        result += toLatexString(tree.children[i], 0);
+        if (i < tree.children.length - 1) {
+            result += ', ';
+        }
+    }
+    result += '\\right)';
+    return result;
+}
+exports.toLatexString = toLatexString;
 function simplifyTree(tree) {
     // Simplify children first
     tree.children = tree.children.map(child => simplifyTree(child));
@@ -527,7 +635,7 @@ function simplifyTree(tree) {
     }
     return tree;
 }
-function applyAllRelations(node) {
+function applyAllRelations(node, relations, inductionHypothesis) {
     let results = [];
     for (const relation of relations) {
         let nodeTree = constructTree(node);
@@ -538,10 +646,6 @@ function applyAllRelations(node) {
     }
     // Apply induction hypothesis as a relation
     const [hypLeft, hypRight] = inductionHypothesis.split('=').map((s) => s.trim());
-    console.log("Trying to apply induction hypothesis:");
-    console.log("  hypLeft: " + hypLeft);
-    console.log("  hypRight: " + hypRight);
-    console.log("  on node: " + node);
     let nodeTree = constructTree(node);
     const applyHypResult = applyRelation(nodeTree, `${hypLeft} = ${hypRight}`);
     if (applyHypResult && applyHypResult != node) {
@@ -610,87 +714,6 @@ function substitute(tree, target, replacement) {
     };
     return substituteInTree(tree);
 }
-const [hypLeft, hypRightOriginal] = inductionHypothesis.split('=').map((s) => s.trim());
-const expr = treeToString(substitute(constructTree(hypLeft), "n", "Add(n,Constant(1))"));
-let rootExpr = constructTree(expr);
-if (rootExpr.value === "root" && rootExpr.children.length > 0) {
-    rootExpr = rootExpr.children[0];
-}
-// Create a separate tree for tracking derivations (not the parse tree)
-let derivationTree = {
-    value: rootExpr,
-    children: []
-};
-let frontier = [derivationTree];
-// Extract the right-hand side of the induction hypothesis
-// Substitute n with n+1 in the hypothesis RHS
-const hypRightTree = constructTree(hypRightOriginal);
-const hypRightSubstituted = substitute(hypRightTree, "n", "Add(n,Constant(1))");
-const hypRight = treeToString(hypRightSubstituted);
-const hypRightMath = toMathString(hypRightSubstituted);
-console.log("\n=== Induction Hypothesis Goal ===");
-console.log("Original RHS: " + hypRightOriginal);
-console.log("After substitution (structure): " + treeToString(hypRightSubstituted));
-console.log("After substitution (math): " + hypRightMath);
-console.log("===================================\n");
-// Normalize math strings by removing spacing differences and simplifying additions like (n+1+1) to (n+2)
-function normalizeMathString(math) {
-    let result = math;
-    // Replace patterns like (n + 1 + 1) with (n + 2)
-    result = result.replace(/\(n \+ 1 \+ 1\)/g, "(n + 2)");
-    return result;
-}
-for (let i = 0; i < 5; i++) {
-    let nextFrontier = [];
-    for (const node of frontier) {
-        const exprStr = treeToString(node.value);
-        const exprMath = toMathString(node.value);
-        const normExprMath = normalizeMathString(exprMath);
-        const normHypMath = normalizeMathString(hypRightMath);
-        // Check if we've reached the induction hypothesis RHS (by comparing normalized math notation)
-        if (normExprMath === normHypMath) {
-            console.log("✓ Reached induction hypothesis goal!");
-            frontier = [];
-            break;
-        }
-        const derived = applyAllRelations(exprStr);
-        for (const result of derived) {
-            const normalized = resolveSubstitutions(result);
-            const childTree = constructTree(normalized);
-            let child = (childTree.value === "root" && childTree.children.length > 0)
-                ? childTree.children[0]
-                : childTree;
-            child = simplifyTree(child);
-            console.log("Derived: " + toMathString(child));
-            // Check if this result matches the hypothesis goal
-            const childStr = treeToString(child);
-            const childMath = toMathString(child);
-            const normChildMath = normalizeMathString(childMath);
-            if (normChildMath === normHypMath) {
-                console.log("✓ Reached induction hypothesis goal!");
-                const derivNode = {
-                    value: child,
-                    children: []
-                };
-                node.children.push(derivNode);
-                nextFrontier = []; // Stop exploring further
-                frontier = [];
-                break;
-            }
-            const derivNode = {
-                value: child,
-                children: []
-            };
-            node.children.push(derivNode);
-            nextFrontier.push(derivNode);
-        }
-        if (frontier.length === 0)
-            break;
-    }
-    frontier = nextFrontier;
-    if (frontier.length === 0)
-        break;
-}
 // Display function for derivation tree
 function displayDerivationTree(node, depth = 0) {
     const indent = '  '.repeat(depth);
@@ -700,4 +723,143 @@ function displayDerivationTree(node, depth = 0) {
         displayDerivationTree(child, depth + 1);
     }
 }
-displayDerivationTree(derivationTree);
+function extractSuccessfulBranchLatex(branch) {
+    if (!branch) {
+        return [];
+    }
+    const latex = [];
+    let current = branch;
+    while (current) {
+        latex.push(toLatexString(current.value));
+        current = current.children.length > 0 ? current.children[0] : null;
+    }
+    return latex;
+}
+function runInduction(input) {
+    const { relations, inductionHypothesis } = input;
+    const [hypLeft, hypRightOriginal] = inductionHypothesis.split('=').map((s) => s.trim());
+    const expr = treeToString(substitute(constructTree(hypLeft), "n", "Add(n,Constant(1))"));
+    let rootExpr = constructTree(expr);
+    if (rootExpr.value === "root" && rootExpr.children.length > 0) {
+        rootExpr = rootExpr.children[0];
+    }
+    // Create a separate tree for tracking derivations (not the parse tree)
+    let derivationTree = {
+        value: rootExpr,
+        children: []
+    };
+    // Track parents for each derivation node to reconstruct a successful branch
+    const parentMap = new Map();
+    parentMap.set(derivationTree, null);
+    let successfulBranch = null;
+    function buildSuccessfulBranch(leaf) {
+        var _a;
+        const path = [];
+        let current = leaf;
+        while (current) {
+            path.push(current);
+            current = (_a = parentMap.get(current)) !== null && _a !== void 0 ? _a : null;
+        }
+        path.reverse();
+        let branchRoot = {
+            value: path[0].value,
+            children: []
+        };
+        let cursor = branchRoot;
+        for (let i = 1; i < path.length; i++) {
+            const nextNode = {
+                value: path[i].value,
+                children: []
+            };
+            cursor.children.push(nextNode);
+            cursor = nextNode;
+        }
+        return branchRoot;
+    }
+    let frontier = [derivationTree];
+    // Substitute n with n+1 in the hypothesis RHS
+    const hypRightTree = constructTree(hypRightOriginal);
+    const hypRightSubstituted = substitute(hypRightTree, "n", "Add(n,Constant(1))");
+    const hypRightMath = toMathString(hypRightSubstituted);
+    console.log("\n=== Induction Hypothesis Goal ===");
+    console.log("Original RHS: " + hypRightOriginal);
+    console.log("After substitution (structure): " + treeToString(hypRightSubstituted));
+    console.log("After substitution (math): " + hypRightMath);
+    console.log("===================================\n");
+    // Normalize math strings by removing spacing differences and simplifying additions like (n+1+1) to (n+2)
+    function normalizeMathString(math) {
+        let result = math;
+        // Replace patterns like (n + 1 + 1) with (n + 2)
+        result = result.replace(/\(n \+ 1 \+ 1\)/g, "(n + 2)");
+        return result;
+    }
+    for (let i = 0; i < 3; i++) {
+        let nextFrontier = [];
+        for (const node of frontier) {
+            const exprStr = treeToString(node.value);
+            const exprMath = toMathString(node.value);
+            const normExprMath = normalizeMathString(exprMath);
+            const normHypMath = normalizeMathString(hypRightMath);
+            // Check if we've reached the induction hypothesis RHS (by comparing normalized math notation)
+            if (normExprMath === normHypMath) {
+                console.log("✓ Reached induction hypothesis goal!");
+                successfulBranch = buildSuccessfulBranch(node);
+                frontier = [];
+                break;
+            }
+            const derived = applyAllRelations(exprStr, relations, inductionHypothesis);
+            for (const result of derived) {
+                const normalized = resolveSubstitutions(result);
+                const childTree = constructTree(normalized);
+                let child = (childTree.value === "root" && childTree.children.length > 0)
+                    ? childTree.children[0]
+                    : childTree;
+                child = simplifyTree(child);
+                console.log("Derived: " + toMathString(child));
+                // Check if this result matches the hypothesis goal
+                const childMath = toMathString(child);
+                const normChildMath = normalizeMathString(childMath);
+                if (normChildMath === normHypMath) {
+                    console.log("✓ Reached induction hypothesis goal!");
+                    const derivNode = {
+                        value: child,
+                        children: []
+                    };
+                    node.children.push(derivNode);
+                    parentMap.set(derivNode, node);
+                    successfulBranch = buildSuccessfulBranch(derivNode);
+                    nextFrontier = []; // Stop exploring further
+                    frontier = [];
+                    break;
+                }
+                const derivNode = {
+                    value: child,
+                    children: []
+                };
+                node.children.push(derivNode);
+                parentMap.set(derivNode, node);
+                nextFrontier.push(derivNode);
+            }
+            if (frontier.length === 0)
+                break;
+        }
+        frontier = nextFrontier;
+        if (frontier.length === 0)
+            break;
+    }
+    if (successfulBranch) {
+        console.log("\n=== Successful Branch (separate) ===");
+        displayDerivationTree(successfulBranch);
+    }
+    return {
+        successfulBranch,
+        successfulBranchLatex: extractSuccessfulBranchLatex(successfulBranch),
+        goalLatex: toLatexString(hypRightSubstituted)
+    };
+}
+exports.runInduction = runInduction;
+if (require.main === module) {
+    const fileContent = fs.readFileSync('src/example.ind', 'utf-8');
+    const input = parseInductionInput(fileContent);
+    runInduction(input);
+}
