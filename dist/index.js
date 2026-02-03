@@ -195,24 +195,38 @@ function matches(nodeTree, patternTree) {
 }
 function putVariables(template, variableMap) {
     let result = template;
+    // First, resolve substitutions: body\Add(n,Constant(1)) means substitute k in body with Add(n,Constant(1))
+    // The pattern is: identifier\something(...) 
+    while (result.includes('\\')) {
+        const subMatch = result.match(/(\w+)\\(.+)/);
+        if (!subMatch)
+            break;
+        const varToSubstitute = subMatch[1]; // e.g., "body" or "k"
+        const substitutionPattern = subMatch[2]; // e.g., "Add(n,Constant(1))"
+        // If the variable to substitute is in our map, get its value
+        if (variableMap.has(varToSubstitute)) {
+            const bodyExpr = variableMap.get(varToSubstitute);
+            // Now we need to find what variable is being substituted in the body
+            // For the sum rule, the body contains k, and we substitute k with the pattern
+            // The pattern format is something like Add(n,Constant(1)), and we need to substitute
+            // the iteration variable (usually 'k') in bodyExpr with this pattern
+            // Extract the iteration variable from bodyExpr (usually the first letter after Sum is the body var)
+            // For now, let's just do a simple replacement of 'k'
+            const bodyTree = constructTree(bodyExpr);
+            const replacementTree = constructTree(substitutionPattern);
+            const substitutedBody = treeToString(substitute(bodyTree, "k", substitutionPattern));
+            result = result.replace(subMatch[0], substitutedBody);
+        }
+        else {
+            break;
+        }
+    }
+    // Then replace remaining variables with their values
     for (const [key, value] of variableMap.entries()) {
         let regex = new RegExp(`\\b${key}\\b`, 'g');
         result = result.replace(regex, value);
     }
-    // Resolve substitutions: a\Func(...) means Func(...) with a substituted in
-    // For now, we'll simplify: a\Func(...) -> Func(...) since the substitution
-    // doesn't affect the function if the function doesn't reference the variable
-    let resolved = result;
-    while (resolved.includes('\\')) {
-        const subMatch = resolved.match(/(\w+)\\(\w+\([^)]*\))/);
-        if (!subMatch)
-            break;
-        const fullMatch = subMatch[0]; // e.g., "k\Add(n,Constant(1))"
-        const funcPart = subMatch[2]; // e.g., "Add(n,Constant(1))"
-        // Replace the whole substitution with just the function part
-        resolved = resolved.replace(fullMatch, funcPart);
-    }
-    return resolved;
+    return result;
 }
 function cloneTree(tree) {
     return {
@@ -321,9 +335,17 @@ function toMathString(input, parentPrecedence = 0) {
             return toMathString(tree.children[0], parentPrecedence);
         }
     }
+    // Handle Sum specially: Sum(body, from, to)
+    if (tree.value === "Sum" && tree.children.length === 3) {
+        const body = toMathString(tree.children[0], 0);
+        const from = toMathString(tree.children[1], 0);
+        const to = toMathString(tree.children[2], 0);
+        return `Σ(${body}, ${from}, ${to})`;
+    }
     const operators = {
         'Add': { symbol: ' + ', precedence: 1 },
         'Sub': { symbol: ' - ', precedence: 1 },
+        'Subtract': { symbol: ' - ', precedence: 1 },
         'Mult': { symbol: ' * ', precedence: 2 },
         'Div': { symbol: ' / ', precedence: 2 },
         'Pow': { symbol: '^', precedence: 3 }
@@ -339,11 +361,6 @@ function toMathString(input, parentPrecedence = 0) {
             result = `(${result})`;
         }
         return result;
-    }
-    // If it's a unary operator (e.g., Sqrt)
-    if (tree.value === "Sqrt" && tree.children.length === 1) {
-        const arg = toMathString(tree.children[0], 4);
-        return `√(${arg})`;
     }
     // Default: render as function call with arguments
     let result = tree.value + '(';
@@ -409,10 +426,12 @@ function applyAllRelations(node) {
             results.push(applyResult);
         }
     }
+    // Apply induction hypothesis as a relation
+    const [hypLeft, hypRight] = inductionHypothesis.split('=').map((s) => s.trim());
     let nodeTree = constructTree(node);
-    const hypResult = applyRelation(nodeTree, inductionHypothesis);
-    if (hypResult && hypResult != node) {
-        results.push(hypResult);
+    const applyHypResult = applyRelation(nodeTree, `${hypLeft} = ${hypRight}`);
+    if (applyHypResult && applyHypResult != node) {
+        results.push(applyHypResult);
     }
     return results;
 }
@@ -449,25 +468,37 @@ function resolveSubstitutions(node) {
     return node;
 }
 function substitute(tree, target, replacement) {
-    let treeString = treeToString(tree);
-    let regex = new RegExp(`\\b${target}\\b`, 'g');
-    treeString = treeString.replace(regex, replacement);
-    return constructTree(treeString);
+    const replacementTree = constructTree(replacement);
+    // Helper function to perform tree-level substitution
+    const substituteInTree = (node) => {
+        // If this node is just the target variable (bare identifier, not wrapped in Variable())
+        if (node.value === target && node.children.length === 0) {
+            // Return the replacement tree (without Variable wrapper)
+            return replacementTree.value === "root" && replacementTree.children.length > 0
+                ? cloneTree(replacementTree.children[0])
+                : cloneTree(replacementTree);
+        }
+        // If this node matches the target pattern wrapped in Variable(target), replace it
+        if (node.value === "Variable" && node.children.length === 1 && node.children[0].value === target) {
+            // Return the replacement tree (without Variable wrapper)
+            return replacementTree.value === "root" && replacementTree.children.length > 0
+                ? cloneTree(replacementTree.children[0])
+                : cloneTree(replacementTree);
+        }
+        // Otherwise, recursively substitute in children
+        return {
+            value: node.value,
+            children: node.children.map(child => substituteInTree(child))
+        };
+    };
+    return substituteInTree(tree);
 }
-const expr = "Sum(k,1,Add(Variable(n),Constant(1)))";
+const [hypLeft, hypRightOriginal] = inductionHypothesis.split('=').map((s) => s.trim());
+const expr = treeToString(substitute(constructTree(hypLeft), "n", "Add(n,Constant(1))"));
 let rootExpr = constructTree(expr);
 if (rootExpr.value === "root" && rootExpr.children.length > 0) {
     rootExpr = rootExpr.children[0];
 }
-let targetExpr = constructTree(inductionHypothesis.split('=')[1].trim());
-console.log("Target Expression before substitution:");
-printTree(targetExpr);
-if (targetExpr.value === "root" && targetExpr.children.length > 0) {
-    targetExpr = targetExpr.children[0];
-}
-targetExpr = substitute(targetExpr, "n", "Add(n,Constant(1))");
-console.log("Target Expression after substitution:");
-printTree(targetExpr);
 // Create a separate tree for tracking derivations (not the parse tree)
 let derivationTree = {
     value: rootExpr,
@@ -475,7 +506,6 @@ let derivationTree = {
 };
 let frontier = [derivationTree];
 // Extract the right-hand side of the induction hypothesis
-const [hypLeft, hypRightOriginal] = inductionHypothesis.split('=').map((s) => s.trim());
 // Substitute n with n+1 in the hypothesis RHS
 const hypRightTree = constructTree(hypRightOriginal);
 const hypRightSubstituted = substitute(hypRightTree, "n", "Add(n,Constant(1))");
