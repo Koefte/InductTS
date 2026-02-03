@@ -15,15 +15,27 @@ var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (
 }) : function(o, v) {
     o["default"] = v;
 });
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.toLatexString = exports.runInduction = exports.parseInductionInput = void 0;
+exports.parseInductionInput = parseInductionInput;
+exports.runInduction = runInduction;
+exports.toLatexString = toLatexString;
 const fs = __importStar(require("fs"));
 function parseInductionInput(fileContent) {
     const statements = fileContent.split('\n').filter(line => line.trim() !== '');
@@ -48,7 +60,6 @@ function parseInductionInput(fileContent) {
     }
     return { relations, inductionHypothesis };
 }
-exports.parseInductionInput = parseInductionInput;
 var TokenType;
 (function (TokenType) {
     TokenType[TokenType["Call"] = 0] = "Call";
@@ -221,10 +232,6 @@ function matches(nodeTree, patternTree) {
             }
             const child1Match = matches(nodeTree.children[1], patternTree.children[1]);
             for (const [key, value] of child1Match.entries()) {
-                // Check for conflicts
-                if (map1.has(key) && map1.get(key) !== value) {
-                    throw new Error(`Variable binding conflict: ${key} cannot be both ${map1.get(key)} and ${value}`);
-                }
                 map1.set(key, value);
             }
             return map1;
@@ -239,10 +246,6 @@ function matches(nodeTree, patternTree) {
                 }
                 const child1Match = matches(nodeTree.children[1], patternTree.children[0]);
                 for (const [key, value] of child1Match.entries()) {
-                    // Check for conflicts
-                    if (map2.has(key) && map2.get(key) !== value) {
-                        throw new Error(`Variable binding conflict: ${key} cannot be both ${map2.get(key)} and ${value}`);
-                    }
                     map2.set(key, value);
                 }
                 return map2;
@@ -258,10 +261,6 @@ function matches(nodeTree, patternTree) {
         let patternChild = patternTree.children[i];
         const childMatches = matches(nodeChild, patternChild);
         for (const [key, value] of childMatches.entries()) {
-            // Check for conflicts
-            if (variableMap.has(key) && variableMap.get(key) !== value) {
-                throw new Error(`Variable binding conflict: ${key} cannot be both ${variableMap.get(key)} and ${value}`);
-            }
             variableMap.set(key, value);
         }
     }
@@ -272,28 +271,51 @@ function putVariables(template, variableMap) {
     // First, resolve substitutions: body\Add(n,Constant(1)) means substitute k in body with Add(n,Constant(1))
     // The pattern is: identifier\something(...) 
     while (result.includes('\\')) {
-        const subMatch = result.match(/(\w+)\\(.+)/);
-        if (!subMatch)
+        // Find the backslash position
+        const backslashIndex = result.indexOf('\\');
+        if (backslashIndex === -1)
             break;
-        const varToSubstitute = subMatch[1]; // e.g., "body" or "k"
-        const substitutionPattern = subMatch[2]; // e.g., "Add(n,Constant(1))"
+        // Extract the variable name before the backslash (walk backwards to find start)
+        let varStart = backslashIndex - 1;
+        while (varStart >= 0 && /\w/.test(result[varStart])) {
+            varStart--;
+        }
+        varStart++;
+        const varToSubstitute = result.substring(varStart, backslashIndex);
+        if (!varToSubstitute || !variableMap.has(varToSubstitute)) {
+            break;
+        }
+        // Extract the substitution pattern after backslash - need to balance parentheses
+        let parenCount = 0;
+        let patternStart = backslashIndex + 1;
+        let patternEnd = patternStart;
+        let started = false;
+        for (let i = patternStart; i < result.length; i++) {
+            const ch = result[i];
+            if (ch === '(') {
+                parenCount++;
+                started = true;
+            }
+            else if (ch === ')') {
+                parenCount--;
+                if (started && parenCount === 0) {
+                    patternEnd = i + 1;
+                    break;
+                }
+            }
+        }
+        const substitutionPattern = result.substring(patternStart, patternEnd);
+        const fullMatch = result.substring(varStart, patternEnd);
         // If the variable to substitute is in our map, get its value
-        if (variableMap.has(varToSubstitute)) {
-            const bodyExpr = variableMap.get(varToSubstitute);
-            // Now we need to find what variable is being substituted in the body
-            // For the sum rule, the body contains k, and we substitute k with the pattern
-            // The pattern format is something like Add(n,Constant(1)), and we need to substitute
-            // the iteration variable (usually 'k') in bodyExpr with this pattern
-            // Extract the iteration variable from bodyExpr (usually the first letter after Sum is the body var)
-            // For now, let's just do a simple replacement of 'k'
-            const bodyTree = constructTree(bodyExpr);
-            const replacementTree = constructTree(substitutionPattern);
-            const substitutedBody = treeToString(substitute(bodyTree, "k", substitutionPattern));
-            result = result.replace(subMatch[0], substitutedBody);
-        }
-        else {
-            break;
-        }
+        const bodyExpr = variableMap.get(varToSubstitute);
+        // Now we need to find what variable is being substituted in the body
+        // For the sum rule, the body contains k, and we substitute k with the pattern
+        // The pattern format is something like Add(n,Constant(1)), and we need to substitute
+        // the iteration variable (usually 'k') in bodyExpr with this pattern
+        // For now, let's just do a simple replacement of 'k'
+        const bodyTree = constructTree(bodyExpr);
+        const substitutedBody = treeToString(substitute(bodyTree, "k", substitutionPattern));
+        result = result.substring(0, varStart) + substitutedBody + result.substring(patternEnd);
     }
     // Then replace remaining variables with their values
     for (const [key, value] of variableMap.entries()) {
@@ -514,7 +536,6 @@ function toLatexString(input, parentPrecedence = 0) {
     result += '\\right)';
     return result;
 }
-exports.toLatexString = toLatexString;
 function simplifyTree(tree) {
     // Simplify children first
     tree.children = tree.children.map(child => simplifyTree(child));
@@ -531,11 +552,18 @@ function simplifyTree(tree) {
             }
             newChildren.push(child);
         }
-        if (constantSum > 0) {
+        if (constantSum !== 0) {
             newChildren.push({
                 value: "Constant",
                 children: [{ value: constantSum.toString(), children: [] }]
             });
+        }
+        // If no non-constant children remain, return the constant sum
+        if (newChildren.length === 0) {
+            return {
+                value: "Constant",
+                children: [{ value: constantSum.toString(), children: [] }]
+            };
         }
         // If only one child remains, return it directly
         if (newChildren.length === 1) {
@@ -561,6 +589,13 @@ function simplifyTree(tree) {
                 value: "Constant",
                 children: [{ value: constantProduct.toString(), children: [] }]
             });
+        }
+        // If no non-constant children remain, return the constant product
+        if (newChildren.length === 0) {
+            return {
+                value: "Constant",
+                children: [{ value: constantProduct.toString(), children: [] }]
+            };
         }
         // If only one child remains, return it directly
         if (newChildren.length === 1) {
@@ -793,7 +828,7 @@ function runInduction(input) {
         result = result.replace(/\(n \+ 1 \+ 1\)/g, "(n + 2)");
         return result;
     }
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 5; i++) {
         let nextFrontier = [];
         for (const node of frontier) {
             const exprStr = treeToString(node.value);
@@ -857,7 +892,6 @@ function runInduction(input) {
         goalLatex: toLatexString(hypRightSubstituted)
     };
 }
-exports.runInduction = runInduction;
 if (require.main === module) {
     const fileContent = fs.readFileSync('src/example.ind', 'utf-8');
     const input = parseInductionInput(fileContent);
