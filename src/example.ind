@@ -7,7 +7,9 @@ Add(Div(a,b),c) = Div(Add(a,Mult(b,c)),b)
 Add(Mult(a,b),Mult(c,b)) = Mult(b,Add(a,c))
 Add(Div(a,b),Div(c,d)) = Div(Add(Mult(a,d),Mult(b,c)),Mult(b,d))
 Mult(a,Add(b,c)) = Add(Mult(a,b),Mult(a,c))
+Mult(Add(b,c),a) = Add(Mult(b,a),Mult(c,a))
+Add(Mult(a,a),Add(Mult(a,2),Constant(1))) = Mult(Add(a,Constant(1)),Add(a,Constant(1)))
 
 induction_hypothesis:
 
-Sum(Subtract(Mult(Constant(2),k),Constant(1)),Constant(1),Variable(n)) = Mult(Variable(n),Variable(n))
+Sum(Subtract(Mult(k,Constant(2)),Constant(1)),Constant(1),Variable(n)) = Mult(Variable(n),Variable(n))

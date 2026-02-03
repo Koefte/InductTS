@@ -15,13 +15,23 @@ var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (
 }) : function(o, v) {
     o["default"] = v;
 });
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("fs"));
 const fileContent = fs.readFileSync('src/example.ind', 'utf-8');
@@ -166,13 +176,37 @@ function matches(nodeTree, patternTree) {
         variableMap.set(patternTree.value, treeToString(nodeTree));
         return variableMap;
     }
-    // Special handling for Constant and Variable wrappers
-    // If pattern is Constant(x) or Variable(x), try to match against bare x
-    if ((patternTree.value === "Constant" || patternTree.value === "Variable") &&
-        patternTree.children.length === 1 &&
-        nodeTree.children.length === 0 &&
-        nodeTree.value === patternTree.children[0].value) {
-        return variableMap;
+    // Special handling for Variable(x) in pattern - should only match bare x or Variable(x), not complex expressions
+    // This is used to indicate "this must be a variable, not any expression"
+    if (patternTree.value === "Variable" && patternTree.children.length === 1) {
+        const patternVarName = patternTree.children[0].value;
+        // Match bare variable node
+        if (nodeTree.children.length === 0 && nodeTree.value === patternVarName) {
+            variableMap.set(patternVarName, nodeTree.value);
+            return variableMap;
+        }
+        // Match Variable(x) node
+        if (nodeTree.value === "Variable" && nodeTree.children.length === 1 &&
+            nodeTree.children[0].value === patternVarName) {
+            variableMap.set(patternVarName, nodeTree.children[0].value);
+            return variableMap;
+        }
+        // Don't match complex expressions
+        throw new Error(`Variable(${patternVarName}) can only match bare variable, not ${treeToString(nodeTree)}`);
+    }
+    // Special handling for Constant(x) in pattern - should only match that constant
+    if (patternTree.value === "Constant" && patternTree.children.length === 1) {
+        const patternConstValue = patternTree.children[0].value;
+        // Match bare constant
+        if (nodeTree.children.length === 0 && nodeTree.value === patternConstValue) {
+            return variableMap;
+        }
+        // Match Constant(x) node
+        if (nodeTree.value === "Constant" && nodeTree.children.length === 1 &&
+            nodeTree.children[0].value === patternConstValue) {
+            return variableMap;
+        }
+        throw new Error(`Constant(${patternConstValue}) does not match ${treeToString(nodeTree)}`);
     }
     // Check that values match
     if (nodeTree.value != patternTree.value) {
@@ -373,45 +407,121 @@ function toMathString(input, parentPrecedence = 0) {
     result += ')';
     return result;
 }
-// Simplify tree by flattening constant additions and combining constants
 function simplifyTree(tree) {
-    if (tree.children.length === 0)
-        return tree;
-    // Recursively simplify children first
-    tree = {
-        value: tree.value,
-        children: tree.children.map(child => simplifyTree(child))
-    };
-    // Helper to extract numeric value from a Constant tree
-    function getConstantValue(t) {
-        if (t.value === "Constant" && t.children.length === 1) {
-            const val = parseInt(t.children[0].value);
-            if (!isNaN(val))
-                return val;
+    // Simplify children first
+    tree.children = tree.children.map(child => simplifyTree(child));
+    if (tree.value === "Add") {
+        let newChildren = [];
+        let constantSum = 0;
+        for (const child of tree.children) {
+            if (child.value === "Constant" && child.children.length === 1) {
+                const constValue = parseInt(child.children[0].value);
+                if (!isNaN(constValue)) {
+                    constantSum += constValue;
+                    continue;
+                }
+            }
+            newChildren.push(child);
         }
-        return null;
+        if (constantSum > 0) {
+            newChildren.push({
+                value: "Constant",
+                children: [{ value: constantSum.toString(), children: [] }]
+            });
+        }
+        // If only one child remains, return it directly
+        if (newChildren.length === 1) {
+            return newChildren[0];
+        }
+        tree.children = newChildren;
     }
-    // If this is Add with Constant children, try to combine them
-    if (tree.value === "Add" && tree.children.length === 2) {
-        const left = tree.children[0];
-        const right = tree.children[1];
-        const rightVal = getConstantValue(right);
-        // If right is a constant and left is Add(..., Constant(a)), combine the constants
-        if (rightVal !== null && left.value === "Add" && left.children.length === 2) {
-            const leftRightVal = getConstantValue(left.children[1]);
-            if (leftRightVal !== null) {
-                const combined = leftRightVal + rightVal;
-                const newConst = {
-                    value: "Constant",
-                    children: [{
-                            value: String(combined),
-                            children: []
-                        }]
-                };
+    if (tree.value == "Mult") {
+        let newChildren = [];
+        let constantProduct = 1;
+        for (const child of tree.children) {
+            if (child.value === "Constant" && child.children.length === 1) {
+                const constValue = parseInt(child.children[0].value);
+                if (!isNaN(constValue)) {
+                    constantProduct *= constValue;
+                    continue;
+                }
+            }
+            newChildren.push(child);
+        }
+        if (constantProduct != 1) {
+            newChildren.push({
+                value: "Constant",
+                children: [{ value: constantProduct.toString(), children: [] }]
+            });
+        }
+        // If only one child remains, return it directly
+        if (newChildren.length === 1) {
+            return newChildren[0];
+        }
+        tree.children = newChildren;
+    }
+    if (tree.value === "Subtract" || tree.value === "Sub") {
+        // If both children are constants, compute the result
+        if (tree.children.length === 2) {
+            const left = tree.children[0];
+            const right = tree.children[1];
+            let leftVal = null;
+            let rightVal = null;
+            if (left.value === "Constant" && left.children.length === 1) {
+                leftVal = parseInt(left.children[0].value);
+            }
+            else if (left.children.length === 0 && !isNaN(parseInt(left.value))) {
+                leftVal = parseInt(left.value);
+            }
+            if (right.value === "Constant" && right.children.length === 1) {
+                rightVal = parseInt(right.children[0].value);
+            }
+            else if (right.children.length === 0 && !isNaN(parseInt(right.value))) {
+                rightVal = parseInt(right.value);
+            }
+            if (leftVal !== null && rightVal !== null) {
+                const result = leftVal - rightVal;
                 return {
-                    value: "Add",
-                    children: [left.children[0], newConst]
+                    value: "Constant",
+                    children: [{ value: result.toString(), children: [] }]
                 };
+            }
+            // Handle Add(..., Constant(a)) - Constant(b) => Add(..., Constant(a-b))
+            if (left.value === "Add" && rightVal !== null) {
+                // Find constant child in Add
+                let constIndex = -1;
+                let constVal = 0;
+                for (let i = 0; i < left.children.length; i++) {
+                    const child = left.children[i];
+                    if (child.value === "Constant" && child.children.length === 1) {
+                        constVal = parseInt(child.children[0].value);
+                        if (!isNaN(constVal)) {
+                            constIndex = i;
+                            break;
+                        }
+                    }
+                }
+                if (constIndex >= 0) {
+                    const newConstVal = constVal - rightVal;
+                    const newChildren = [...left.children];
+                    if (newConstVal === 0) {
+                        // Remove the constant entirely
+                        newChildren.splice(constIndex, 1);
+                        if (newChildren.length === 1) {
+                            return newChildren[0];
+                        }
+                    }
+                    else {
+                        newChildren[constIndex] = {
+                            value: "Constant",
+                            children: [{ value: newConstVal.toString(), children: [] }]
+                        };
+                    }
+                    return {
+                        value: "Add",
+                        children: newChildren
+                    };
+                }
             }
         }
     }
@@ -428,9 +538,16 @@ function applyAllRelations(node) {
     }
     // Apply induction hypothesis as a relation
     const [hypLeft, hypRight] = inductionHypothesis.split('=').map((s) => s.trim());
+    console.log("Trying to apply induction hypothesis:");
+    console.log("  hypLeft: " + hypLeft);
+    console.log("  hypRight: " + hypRight);
+    console.log("  on node: " + node);
     let nodeTree = constructTree(node);
     const applyHypResult = applyRelation(nodeTree, `${hypLeft} = ${hypRight}`);
     if (applyHypResult && applyHypResult != node) {
+        console.log("Got here via induction hypothesis");
+        console.log("  result: " + applyHypResult);
+        printTree(constructTree(applyHypResult));
         results.push(applyHypResult);
     }
     return results;
@@ -513,7 +630,7 @@ const hypRight = treeToString(hypRightSubstituted);
 const hypRightMath = toMathString(hypRightSubstituted);
 console.log("\n=== Induction Hypothesis Goal ===");
 console.log("Original RHS: " + hypRightOriginal);
-console.log("After substitution (structure): " + hypRight);
+console.log("After substitution (structure): " + treeToString(hypRightSubstituted));
 console.log("After substitution (math): " + hypRightMath);
 console.log("===================================\n");
 // Normalize math strings by removing spacing differences and simplifying additions like (n+1+1) to (n+2)
@@ -540,9 +657,11 @@ for (let i = 0; i < 5; i++) {
         for (const result of derived) {
             const normalized = resolveSubstitutions(result);
             const childTree = constructTree(normalized);
-            const child = (childTree.value === "root" && childTree.children.length > 0)
+            let child = (childTree.value === "root" && childTree.children.length > 0)
                 ? childTree.children[0]
                 : childTree;
+            child = simplifyTree(child);
+            console.log("Derived: " + toMathString(child));
             // Check if this result matches the hypothesis goal
             const childStr = treeToString(child);
             const childMath = toMathString(child);
