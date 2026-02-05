@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { parseEquation } from './humanNotationParser';
 
 type InductionInput = {
     relations: string[];
@@ -21,7 +22,17 @@ function parseInductionInput(fileContent: string): InductionInput {
             continue;
         }
         if(currentSegment == "relations"){
-            relations.push(statement);
+            // Check if already in Lisp notation (contains backslash substitution or starts with uppercase function)
+            const isLispNotation = statement.includes('\\') || /^[A-Z]/.test(statement.trim());
+            
+            if (isLispNotation) {
+                // Already in Lisp notation, use as-is
+                relations.push(statement);
+            } else {
+                // Parse human notation to Lisp notation
+                const lispNotation = parseEquation(statement);
+                relations.push(lispNotation);
+            }
         }
         if(currentSegment == "induction_hypothesis"){
             inductionHypothesis = statement;
@@ -832,11 +843,17 @@ function extractSuccessfulBranchLatex(branch: Tree<Tree<string>> | null): string
         return [];
     }
     const latex: string[] = [];
-    let current: Tree<Tree<string>> | null = branch;
-    while(current){
-        latex.push(toLatexString(current.value));
-        current = current.children.length > 0 ? current.children[0] : null;
+    
+    // Recursively collect all nodes in the branch (depth-first)
+    function collectNodes(node: Tree<Tree<string>>): void {
+        latex.push(toLatexString(node.value));
+        // Process all children (though typically there should only be one in a successful branch)
+        for (const child of node.children) {
+            collectNodes(child);
+        }
     }
+    
+    collectNodes(branch);
     return latex;
 }
 
@@ -981,9 +998,46 @@ function runInduction(input: InductionInput): {
 }
 
 if(require.main === module){
-    const fileContent = fs.readFileSync('src/example.ind', 'utf-8');
-    const input = parseInductionInput(fileContent);
-    runInduction(input);
+    if(process.argv.length > 2){
+        // Command line argument provided - use it as the induction hypothesis
+        const hypothesisInput = process.argv[2];
+        let lispHypothesis: string;
+        
+        // Try to parse as human notation first
+        try {
+            // Import the parser
+            const { humanToLisp } = require('./humanNotationParser');
+            
+            // Convert human notation to Lisp
+            if (hypothesisInput.includes('=')) {
+                const equalsIndex = hypothesisInput.indexOf('=');
+                const left = hypothesisInput.substring(0, equalsIndex).trim();
+                const right = hypothesisInput.substring(equalsIndex + 1).trim();
+                lispHypothesis = `${humanToLisp(left)} = ${humanToLisp(right)}`;
+            } else {
+                lispHypothesis = humanToLisp(hypothesisInput);
+            }
+        } catch (parseError) {
+            // If parsing fails, assume it's already in Lisp notation
+            lispHypothesis = hypothesisInput;
+        }
+        
+        // Load relations from example.ind
+        const fileContent = fs.readFileSync('src/example.ind', 'utf-8');
+        const parsedFile = parseInductionInput(fileContent);
+        
+        const input: InductionInput = {
+            relations: parsedFile.relations,
+            inductionHypothesis: lispHypothesis
+        };
+        
+        runInduction(input);
+    } else {
+        // No argument - use example.ind
+        const fileContent = fs.readFileSync('src/example.ind', 'utf-8');
+        const input = parseInductionInput(fileContent);
+        runInduction(input);
+    }
 }
 
 export { parseInductionInput, runInduction, toLatexString };

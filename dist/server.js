@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const fs = __importStar(require("fs"));
 const index_1 = require("./index");
+const humanNotationParser_1 = require("./humanNotationParser");
 const app = (0, express_1.default)();
 app.use(express_1.default.json({ limit: '1mb' }));
 const exampleContent = fs.readFileSync('src/example.ind', 'utf-8');
@@ -146,9 +147,29 @@ app.post('/induction', (req, res) => {
     try {
         let input;
         if (typeof ((_a = req.body) === null || _a === void 0 ? void 0 : _a.inductionHypothesis) === 'string') {
+            // Parse human-readable notation to Lisp notation
+            const hypothesisInput = req.body.inductionHypothesis.trim();
+            let lispHypothesis;
+            // Try to parse as human notation first
+            try {
+                // Check if it contains '=' (an equation)
+                if (hypothesisInput.includes('=')) {
+                    const equalsIndex = hypothesisInput.indexOf('=');
+                    const left = hypothesisInput.substring(0, equalsIndex).trim();
+                    const right = hypothesisInput.substring(equalsIndex + 1).trim();
+                    lispHypothesis = `${(0, humanNotationParser_1.humanToLisp)(left)} = ${(0, humanNotationParser_1.humanToLisp)(right)}`;
+                }
+                else {
+                    lispHypothesis = (0, humanNotationParser_1.humanToLisp)(hypothesisInput);
+                }
+            }
+            catch (parseError) {
+                // If parsing fails, assume it's already in Lisp notation
+                lispHypothesis = hypothesisInput;
+            }
             input = {
                 relations: fixedRelations,
-                inductionHypothesis: req.body.inductionHypothesis
+                inductionHypothesis: lispHypothesis
             };
         }
         else {

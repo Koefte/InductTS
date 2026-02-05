@@ -1,6 +1,7 @@
-import express from 'express';
+import express, { Request, Response } from 'express';
 import * as fs from 'fs';
 import { parseInductionInput, runInduction, InductionInput } from './index';
+import { humanToLisp } from './humanNotationParser';
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -9,11 +10,11 @@ const exampleContent = fs.readFileSync('src/example.ind', 'utf-8');
 const fixedInput = parseInductionInput(exampleContent);
 const fixedRelations = fixedInput.relations;
 
-app.get('/health', (_req, res) => {
+app.get('/health', (_req: Request, res: Response) => {
     res.json({ ok: true });
 });
 
-app.get('/', (_req, res) => {
+app.get('/', (_req: Request, res: Response) => {
     res.type('html').send(`<!doctype html>
 <html lang="en">
 <head>
@@ -108,13 +109,33 @@ app.get('/', (_req, res) => {
 </html>`);
 });
 
-app.post('/induction', (req, res) => {
+app.post('/induction', (req: Request, res: Response) => {
     try {
     let input: InductionInput;
     if(typeof req.body?.inductionHypothesis === 'string'){
+      // Parse human-readable notation to Lisp notation
+      const hypothesisInput = req.body.inductionHypothesis.trim();
+      let lispHypothesis: string;
+      
+      // Try to parse as human notation first
+      try {
+        // Check if it contains '=' (an equation)
+        if (hypothesisInput.includes('=')) {
+          const equalsIndex = hypothesisInput.indexOf('=');
+          const left = hypothesisInput.substring(0, equalsIndex).trim();
+          const right = hypothesisInput.substring(equalsIndex + 1).trim();
+          lispHypothesis = `${humanToLisp(left)} = ${humanToLisp(right)}`;
+        } else {
+          lispHypothesis = humanToLisp(hypothesisInput);
+        }
+      } catch (parseError) {
+        // If parsing fails, assume it's already in Lisp notation
+        lispHypothesis = hypothesisInput;
+      }
+      
       input = {
         relations: fixedRelations,
-        inductionHypothesis: req.body.inductionHypothesis
+        inductionHypothesis: lispHypothesis
       };
     } else {
       return res.status(400).json({ error: 'Provide inductionHypothesis.' });

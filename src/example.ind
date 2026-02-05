@@ -2,25 +2,25 @@
 
 relations:
 
-Add(Mult(a,a),Add(Mult(a,Constant(2)),Constant(1))) = Mult(Add(a,Constant(1)),Add(a,Constant(1)))
-Add(a,b) = Add(b,a)
-Mult(a,b) = Mult(b,a)
-Add(a,Add(b,c)) = Add(Add(a,b),c)
-Add(Add(a,b),c) = Add(a,Add(b,c))
-Mult(a,Mult(b,c)) = Mult(Mult(a,b),c)
-Mult(Mult(a,b),c) = Mult(a,Mult(b,c))
-Mult(a, Add(b, c)) = Add(Mult(a, b), Mult(a, c))
-Mult(Add(a, b), c) = Add(Mult(a, c), Mult(b, c))
-Add(Mult(a, b), Mult(a, c)) = Mult(a, Add(b, c))
-Mult(Add(a, b), Add(c, d)) = Add(Mult(a, c), Add(Mult(a, d), Add(Mult(b, c), Mult(b, d))))
-Add(Div(a, b), c) = Div(Add(a, Mult(b, c)), b)
-Add(Div(a, b), Div(c, d)) = Div(Add(Mult(a, d), Mult(b, c)), Mult(b, d))
-Mult(Div(a, b), c) = Div(Mult(a, c), b)
-Div(Mult(a, b), b) = a
-Div(a, Constant(1)) = a
-Mult(a, Constant(1)) = a
-Add(a, Constant(0)) = a
-Add(a, Mult(n, a)) = Mult(Add(n, Constant(1)), a)
-Mult(Add(a, b), Add(a, b)) = Add(Mult(a, a), Add(Mult(Constant(2), Mult(a, b)), Mult(b, b)))
+a*a + a*2 + 1 = (a+1) * (a+1)
+a + b = b + a
+a * b = b * a
+a + (b + c) = (a + b) + c
+(a + b) + c = a + (b + c)
+a * (b * c) = (a * b) * c
+(a * b) * c = a * (b * c)
+a * (b + c) = a*b + a*c
+(a + b) * c = a*c + b*c
+a*b + a*c = a * (b + c)
+(a + b) * (c + d) = a*c + a*d + b*c + b*d
+a/b + c = (a + b*c) / b
+a/b + c/d = (a*d + b*c) / (b*d)
+a/b * c = (a*c) / b
+(a*b) / b = a
+a / 1 = a
+a * 1 = a
+a + 0 = a
+a + n*a = (n + 1) * a
+(a + b) * (a + b) = a*a + 2*a*b + b*b
 Sum(body,from,Add(Variable(n),Constant(1))) = Add(Sum(body,from,n), body\Add(n,Constant(1))) 
 
