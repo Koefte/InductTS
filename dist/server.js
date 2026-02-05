@@ -150,22 +150,34 @@ app.post('/induction', (req, res) => {
             // Parse human-readable notation to Lisp notation
             const hypothesisInput = req.body.inductionHypothesis.trim();
             let lispHypothesis;
-            // Try to parse as human notation first
-            try {
-                // Check if it contains '=' (an equation)
-                if (hypothesisInput.includes('=')) {
-                    const equalsIndex = hypothesisInput.indexOf('=');
-                    const left = hypothesisInput.substring(0, equalsIndex).trim();
-                    const right = hypothesisInput.substring(equalsIndex + 1).trim();
-                    lispHypothesis = `${(0, humanNotationParser_1.humanToLisp)(left)} = ${(0, humanNotationParser_1.humanToLisp)(right)}`;
-                }
-                else {
-                    lispHypothesis = (0, humanNotationParser_1.humanToLisp)(hypothesisInput);
-                }
-            }
-            catch (parseError) {
-                // If parsing fails, assume it's already in Lisp notation
+            const isLikelyLisp = (value) => {
+                if (!value)
+                    return false;
+                const lispFunctionPattern = /\b[A-Z][A-Za-z0-9_]*\s*\(/;
+                const lispKeywordsPattern = /\b(Constant|Variable|Add|Subtract|Mult|Div|Sum)\s*\(/;
+                return lispFunctionPattern.test(value) || lispKeywordsPattern.test(value);
+            };
+            if (isLikelyLisp(hypothesisInput)) {
                 lispHypothesis = hypothesisInput;
+            }
+            else {
+                // Try to parse as human notation first
+                try {
+                    // Check if it contains '=' (an equation)
+                    if (hypothesisInput.includes('=')) {
+                        const equalsIndex = hypothesisInput.indexOf('=');
+                        const left = hypothesisInput.substring(0, equalsIndex).trim();
+                        const right = hypothesisInput.substring(equalsIndex + 1).trim();
+                        lispHypothesis = `${(0, humanNotationParser_1.humanToLisp)(left)} = ${(0, humanNotationParser_1.humanToLisp)(right)}`;
+                    }
+                    else {
+                        lispHypothesis = (0, humanNotationParser_1.humanToLisp)(hypothesisInput);
+                    }
+                }
+                catch (parseError) {
+                    // If parsing fails, assume it's already in Lisp notation
+                    lispHypothesis = hypothesisInput;
+                }
             }
             input = {
                 relations: fixedRelations,

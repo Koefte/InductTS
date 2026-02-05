@@ -130,10 +130,12 @@ function tokenizeHumanNotation(input: string): HumanToken[] {
 class Parser {
     private tokens: HumanToken[];
     private position: number;
+    private wrapVariables: boolean;
 
-    constructor(tokens: HumanToken[]) {
+    constructor(tokens: HumanToken[], wrapVariables: boolean) {
         this.tokens = tokens;
         this.position = 0;
+        this.wrapVariables = wrapVariables;
     }
 
     private peek(): HumanToken | null {
@@ -154,6 +156,23 @@ class Parser {
             throw new Error(`Expected ${HumanTokenType[type]}, got ${HumanTokenType[token.type]}`);
         }
         return token;
+    }
+
+    private isPrimaryStart(token: HumanToken | null): boolean {
+        if (!token) return false;
+        return token.type === HumanTokenType.Number
+            || token.type === HumanTokenType.Variable
+            || token.type === HumanTokenType.Identifier
+            || token.type === HumanTokenType.LParen;
+    }
+
+    public parseAll(): string {
+        const expr = this.parseExpression();
+        if (this.peek()) {
+            const next = this.peek()!;
+            throw new Error(`Unexpected token: ${HumanTokenType[next.type]} (${next.value})`);
+        }
+        return expr;
     }
 
     // Parse expression with operator precedence
@@ -181,13 +200,20 @@ class Parser {
     private parseMultiplicative(): string {
         let left = this.parsePrimary();
 
-        while (this.peek() && (this.peek()!.type === HumanTokenType.Mult || this.peek()!.type === HumanTokenType.Div)) {
-            const op = this.consume();
-            const right = this.parsePrimary();
-            if (op.type === HumanTokenType.Mult) {
-                left = `Mult(${left},${right})`;
+        while (this.peek() && (this.peek()!.type === HumanTokenType.Mult || this.peek()!.type === HumanTokenType.Div || this.isPrimaryStart(this.peek()))) {
+            const next = this.peek()!;
+            if (next.type === HumanTokenType.Mult || next.type === HumanTokenType.Div) {
+                const op = this.consume();
+                const right = this.parsePrimary();
+                if (op.type === HumanTokenType.Mult) {
+                    left = `Mult(${left},${right})`;
+                } else {
+                    left = `Div(${left},${right})`;
+                }
             } else {
-                left = `Div(${left},${right})`;
+                // Implicit multiplication (e.g., 2k, n(n+1))
+                const right = this.parsePrimary();
+                left = `Mult(${left},${right})`;
             }
         }
 
@@ -209,7 +235,7 @@ class Parser {
         // Variable
         if (token.type === HumanTokenType.Variable) {
             this.consume();
-            return token.value;
+            return this.wrapVariables ? `Variable(${token.value})` : token.value;
         }
 
         // Function call or special identifier (like Sum, Variable, Constant)
@@ -237,7 +263,7 @@ class Parser {
                 return `${name}(${args.join(',')})`;
             } else {
                 // Just an identifier without parentheses - treat as variable
-                return name;
+                return this.wrapVariables ? `Variable(${name})` : name;
             }
         }
 
@@ -256,10 +282,10 @@ class Parser {
 /**
  * Convert human-readable mathematical notation to Lisp-like notation
  */
-export function humanToLisp(input: string): string {
+export function humanToLisp(input: string, options?: { wrapVariables?: boolean }): string {
     const tokens = tokenizeHumanNotation(input);
-    const parser = new Parser(tokens);
-    return parser.parseExpression();
+    const parser = new Parser(tokens, options?.wrapVariables !== false);
+    return parser.parseAll();
 }
 
 /**
@@ -274,8 +300,8 @@ export function parseEquation(input: string): string {
     const left = input.substring(0, equalsIndex).trim();
     const right = input.substring(equalsIndex + 1).trim();
 
-    const leftLisp = humanToLisp(left);
-    const rightLisp = humanToLisp(right);
+    const leftLisp = humanToLisp(left, { wrapVariables: false });
+    const rightLisp = humanToLisp(right, { wrapVariables: false });
 
     return `${leftLisp} = ${rightLisp}`;
 }

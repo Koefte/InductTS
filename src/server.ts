@@ -116,21 +116,32 @@ app.post('/induction', (req: Request, res: Response) => {
       // Parse human-readable notation to Lisp notation
       const hypothesisInput = req.body.inductionHypothesis.trim();
       let lispHypothesis: string;
+
+      const isLikelyLisp = (value: string): boolean => {
+        if (!value) return false;
+        const lispFunctionPattern = /\b[A-Z][A-Za-z0-9_]*\s*\(/;
+        const lispKeywordsPattern = /\b(Constant|Variable|Add|Subtract|Mult|Div|Sum)\s*\(/;
+        return lispFunctionPattern.test(value) || lispKeywordsPattern.test(value);
+      };
       
-      // Try to parse as human notation first
-      try {
-        // Check if it contains '=' (an equation)
-        if (hypothesisInput.includes('=')) {
-          const equalsIndex = hypothesisInput.indexOf('=');
-          const left = hypothesisInput.substring(0, equalsIndex).trim();
-          const right = hypothesisInput.substring(equalsIndex + 1).trim();
-          lispHypothesis = `${humanToLisp(left)} = ${humanToLisp(right)}`;
-        } else {
-          lispHypothesis = humanToLisp(hypothesisInput);
-        }
-      } catch (parseError) {
-        // If parsing fails, assume it's already in Lisp notation
+      if (isLikelyLisp(hypothesisInput)) {
         lispHypothesis = hypothesisInput;
+      } else {
+        // Try to parse as human notation first
+        try {
+          // Check if it contains '=' (an equation)
+          if (hypothesisInput.includes('=')) {
+            const equalsIndex = hypothesisInput.indexOf('=');
+            const left = hypothesisInput.substring(0, equalsIndex).trim();
+            const right = hypothesisInput.substring(equalsIndex + 1).trim();
+            lispHypothesis = `${humanToLisp(left)} = ${humanToLisp(right)}`;
+          } else {
+            lispHypothesis = humanToLisp(hypothesisInput);
+          }
+        } catch (parseError) {
+          // If parsing fails, assume it's already in Lisp notation
+          lispHypothesis = hypothesisInput;
+        }
       }
       
       input = {

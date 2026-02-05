@@ -929,7 +929,7 @@ function runInduction(input: InductionInput): {
         return result;
     }
 
-    for(let i = 0; i < 5; i++){
+    for(let i = 0; i < 100; i++){
         let nextFrontier: Tree<Tree<string>>[] = [];
         for (const node of frontier) {
             const exprStr = treeToString(node.value);

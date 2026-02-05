@@ -843,7 +843,7 @@ function runInduction(input) {
         result = result.replace(/\(n \+ 1 \+ 1\)/g, "(n + 2)");
         return result;
     }
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 100; i++) {
         let nextFrontier = [];
         for (const node of frontier) {
             const exprStr = treeToString(node.value);
