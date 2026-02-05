@@ -16,6 +16,7 @@ enum HumanTokenType {
     Minus,
     Mult,
     Div,
+    Pow,
     LParen,
     RParen,
     Comma,
@@ -101,6 +102,10 @@ function tokenizeHumanNotation(input: string): HumanToken[] {
                 break;
             case '/':
                 tokens.push({ type: HumanTokenType.Div, value: char });
+                i++;
+                break;
+            case '^':
+                tokens.push({ type: HumanTokenType.Pow, value: char });
                 i++;
                 break;
             case '(':
@@ -198,13 +203,13 @@ class Parser {
     }
 
     private parseMultiplicative(): string {
-        let left = this.parsePrimary();
+        let left = this.parseExponent();
 
         while (this.peek() && (this.peek()!.type === HumanTokenType.Mult || this.peek()!.type === HumanTokenType.Div || this.isPrimaryStart(this.peek()))) {
             const next = this.peek()!;
             if (next.type === HumanTokenType.Mult || next.type === HumanTokenType.Div) {
                 const op = this.consume();
-                const right = this.parsePrimary();
+                const right = this.parseExponent();
                 if (op.type === HumanTokenType.Mult) {
                     left = `Mult(${left},${right})`;
                 } else {
@@ -212,9 +217,21 @@ class Parser {
                 }
             } else {
                 // Implicit multiplication (e.g., 2k, n(n+1))
-                const right = this.parsePrimary();
+                const right = this.parseExponent();
                 left = `Mult(${left},${right})`;
             }
+        }
+
+        return left;
+    }
+
+    private parseExponent(): string {
+        let left = this.parsePrimary();
+
+        if (this.peek() && this.peek()!.type === HumanTokenType.Pow) {
+            this.consume();
+            const right = this.parseExponent(); // right-associative
+            return `Pow(${left},${right})`;
         }
 
         return left;

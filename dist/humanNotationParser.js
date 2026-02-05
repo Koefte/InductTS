@@ -20,11 +20,12 @@ var HumanTokenType;
     HumanTokenType[HumanTokenType["Minus"] = 3] = "Minus";
     HumanTokenType[HumanTokenType["Mult"] = 4] = "Mult";
     HumanTokenType[HumanTokenType["Div"] = 5] = "Div";
-    HumanTokenType[HumanTokenType["LParen"] = 6] = "LParen";
-    HumanTokenType[HumanTokenType["RParen"] = 7] = "RParen";
-    HumanTokenType[HumanTokenType["Comma"] = 8] = "Comma";
-    HumanTokenType[HumanTokenType["Identifier"] = 9] = "Identifier";
-    HumanTokenType[HumanTokenType["Equals"] = 10] = "Equals";
+    HumanTokenType[HumanTokenType["Pow"] = 6] = "Pow";
+    HumanTokenType[HumanTokenType["LParen"] = 7] = "LParen";
+    HumanTokenType[HumanTokenType["RParen"] = 8] = "RParen";
+    HumanTokenType[HumanTokenType["Comma"] = 9] = "Comma";
+    HumanTokenType[HumanTokenType["Identifier"] = 10] = "Identifier";
+    HumanTokenType[HumanTokenType["Equals"] = 11] = "Equals";
 })(HumanTokenType || (HumanTokenType = {}));
 // Known function names that should be capitalized
 const KNOWN_FUNCTIONS = ['sum', 'mult', 'add', 'div', 'subtract', 'constant', 'variable'];
@@ -92,6 +93,10 @@ function tokenizeHumanNotation(input) {
                 break;
             case '/':
                 tokens.push({ type: HumanTokenType.Div, value: char });
+                i++;
+                break;
+            case '^':
+                tokens.push({ type: HumanTokenType.Pow, value: char });
                 i++;
                 break;
             case '(':
@@ -176,12 +181,12 @@ class Parser {
         return left;
     }
     parseMultiplicative() {
-        let left = this.parsePrimary();
+        let left = this.parseExponent();
         while (this.peek() && (this.peek().type === HumanTokenType.Mult || this.peek().type === HumanTokenType.Div || this.isPrimaryStart(this.peek()))) {
             const next = this.peek();
             if (next.type === HumanTokenType.Mult || next.type === HumanTokenType.Div) {
                 const op = this.consume();
-                const right = this.parsePrimary();
+                const right = this.parseExponent();
                 if (op.type === HumanTokenType.Mult) {
                     left = `Mult(${left},${right})`;
                 }
@@ -191,9 +196,18 @@ class Parser {
             }
             else {
                 // Implicit multiplication (e.g., 2k, n(n+1))
-                const right = this.parsePrimary();
+                const right = this.parseExponent();
                 left = `Mult(${left},${right})`;
             }
+        }
+        return left;
+    }
+    parseExponent() {
+        let left = this.parsePrimary();
+        if (this.peek() && this.peek().type === HumanTokenType.Pow) {
+            this.consume();
+            const right = this.parseExponent(); // right-associative
+            return `Pow(${left},${right})`;
         }
         return left;
     }

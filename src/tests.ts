@@ -1,6 +1,7 @@
-import { parseInductionInput, runInduction, InductionInput } from './index';
+import { parseInductionInput, InductionInput } from './index';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Worker } from 'worker_threads';
 
 interface TestCase {
     name: string;
@@ -114,49 +115,90 @@ interface TestResult {
     duration: number;
 }
 
-function runTest(testCase: TestCase, relations: string[]): TestResult {
-    const startTime = Date.now();
-    
-    try {
-        // Suppress console output during tests
-        const originalLog = console.log;
-        const logs: string[] = [];
-        console.log = (...args) => logs.push(args.join(' '));
-        
-        const input: InductionInput = {
-            relations,
-            inductionHypothesis: testCase.inductionHypothesis
-        };
-        
-        const result = runInduction(input);
-        
-        console.log = originalLog;
-        
-        const succeeded = result.successfulBranch !== null;
-        const passed = succeeded === testCase.shouldSucceed;
-        
-        return {
-            name: testCase.name,
-            passed,
-            expected: testCase.shouldSucceed,
-            details: succeeded 
-                ? `Found proof with ${result.successfulBranchLatex.length} steps`
-                : 'No proof found',
-            duration: Date.now() - startTime
-        };
-    } catch (error) {
-        console.log = console.log; // Restore in case of error
-        return {
-            name: testCase.name,
-            passed: !testCase.shouldSucceed, // If we expected failure, exception counts as pass
-            expected: testCase.shouldSucceed,
-            details: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            duration: Date.now() - startTime
-        };
-    }
+function runInductionWithTimeout(input: InductionInput, timeoutMs: number): Promise<{ result?: any; error?: string; timedOut?: boolean }> {
+    return new Promise((resolve) => {
+        const workerPath = path.join(__dirname, 'inductionWorker.js');
+        const worker = new Worker(workerPath, { workerData: input });
+        let settled = false;
+
+        const timeout = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            worker.terminate().catch(() => undefined);
+            resolve({ timedOut: true });
+        }, timeoutMs);
+
+        worker.on('message', (message) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            resolve(message);
+        });
+
+        worker.on('error', (err) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            resolve({ error: String(err) });
+        });
+
+        worker.on('exit', (code) => {
+            if (settled) return;
+            if (code !== 0) {
+                settled = true;
+                clearTimeout(timeout);
+                resolve({ error: `Worker exited with code ${code}` });
+            }
+        });
+    });
 }
 
-function runAllTests(): void {
+async function runTest(testCase: TestCase, relations: string[]): Promise<TestResult> {
+    const startTime = Date.now();
+    const input: InductionInput = {
+        relations,
+        inductionHypothesis: testCase.inductionHypothesis
+    };
+
+    const response = await runInductionWithTimeout(input, 10_000);
+    const duration = Date.now() - startTime;
+
+    if (response.timedOut) {
+        return {
+            name: testCase.name,
+            passed: false,
+            expected: testCase.shouldSucceed,
+            details: 'Timed out after 10s',
+            duration
+        };
+    }
+
+    if (response.error) {
+        return {
+            name: testCase.name,
+            passed: !testCase.shouldSucceed,
+            expected: testCase.shouldSucceed,
+            details: `Error: ${response.error}`,
+            duration
+        };
+    }
+
+    const result = response.result;
+    const succeeded = result?.successfulBranch !== null;
+    const passed = succeeded === testCase.shouldSucceed;
+
+    return {
+        name: testCase.name,
+        passed,
+        expected: testCase.shouldSucceed,
+        details: succeeded
+            ? `Found proof with ${result.successfulBranchLatex.length} steps`
+            : 'No proof found',
+        duration
+    };
+}
+
+async function runAllTests(): Promise<void> {
     console.log('═'.repeat(60));
     console.log('  INDUCTION PROVER TEST SUITE');
     console.log('═'.repeat(60));
@@ -171,7 +213,7 @@ function runAllTests(): void {
     
     for (const testCase of testCases) {
         process.stdout.write(`Testing: ${testCase.name}... `);
-        const result = runTest(testCase, relations);
+        const result = await runTest(testCase, relations);
         results.push(result);
         
         if (result.passed) {
@@ -212,7 +254,10 @@ function runAllTests(): void {
 
 // Run if this is the main module
 if (require.main === module) {
-    runAllTests();
+    runAllTests().catch((error) => {
+        console.error(`Test runner error: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
+    });
 }
 
 export { runAllTests, runTest, testCases, TestCase, TestResult };

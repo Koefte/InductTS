@@ -17,6 +17,7 @@ a/b + c = (a + b*c) / b
 a/b + c/d = (a*d + b*c) / (b*d)
 a/b * c = (a*c) / b
 (a*b) / b = a
+a*n*n + b*n + c = a*(n+x)*(n+y) where x*y = c/a and x+y = b/a
 a / 1 = a
 a * 1 = a
 a + 0 = a

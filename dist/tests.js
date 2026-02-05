@@ -32,6 +32,15 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.testCases = void 0;
 exports.runAllTests = runAllTests;
@@ -39,6 +48,7 @@ exports.runTest = runTest;
 const index_1 = require("./index");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+const worker_threads_1 = require("worker_threads");
 // Load relations from example.ind
 function loadRelations() {
     const filePath = path.join(__dirname, '../src/example.ind');
@@ -79,22 +89,128 @@ const testCases = [
         inductionHypothesis: 'Sum(Mult(k,Constant(2)),Constant(1),Variable(n)) = Mult(Variable(n),Add(Variable(n),Constant(1)))',
         shouldSucceed: true
     },
+    {
+        name: 'Sum of k^2 (expected fail)',
+        description: 'Σ(k^2, k=1 to n) = n(n+1)(2n+1)/6 (not supported by current relations)',
+        inductionHypothesis: 'Sum(Mult(k,k),Constant(1),Variable(n)) = Div(Mult(Mult(Variable(n),Add(Variable(n),Constant(1))),Add(Mult(Constant(2),Variable(n)),Constant(1))),Constant(6))',
+        shouldSucceed: false
+    },
+    {
+        name: 'Sum of k^3 (expected fail)',
+        description: 'Σ(k^3, k=1 to n) = (n(n+1)/2)^2 (not supported by current relations)',
+        inductionHypothesis: 'Sum(Mult(Mult(k,k),k),Constant(1),Variable(n)) = Pow(Div(Mult(Variable(n),Add(Variable(n),Constant(1))),Constant(2)),Constant(2))',
+        shouldSucceed: false
+    },
+    {
+        name: 'Sum of 2k-1 (odd numbers) alternative form',
+        description: 'Σ(2k-1, k=1 to n) = n^2',
+        inductionHypothesis: 'Sum(Subtract(Mult(Constant(2),k),Constant(1)),Constant(1),Variable(n)) = Mult(Variable(n),Variable(n))',
+        shouldSucceed: true
+    },
+    {
+        name: 'Sum of k+1 (expected fail)',
+        description: 'Σ(k+1, k=1 to n) = n(n+3)/2 (may fail without targeted relations)',
+        inductionHypothesis: 'Sum(Add(k,Constant(1)),Constant(1),Variable(n)) = Div(Mult(Variable(n),Add(Variable(n),Constant(3))),Constant(2))',
+        shouldSucceed: false
+    },
+    {
+        name: 'Sum of k-1 (expected fail)',
+        description: 'Σ(k-1, k=1 to n) = n(n-1)/2 (may fail without targeted relations)',
+        inductionHypothesis: 'Sum(Subtract(k,Constant(1)),Constant(1),Variable(n)) = Div(Mult(Variable(n),Subtract(Variable(n),Constant(1))),Constant(2))',
+        shouldSucceed: false
+    },
+    {
+        name: 'Sum of constant 3',
+        description: 'Σ(3, k=1 to n) = 3n',
+        inductionHypothesis: 'Sum(Constant(3),Constant(1),Variable(n)) = Mult(Constant(3),Variable(n))',
+        shouldSucceed: true
+    },
+    {
+        name: 'Sum of 3k (expected fail)',
+        description: 'Σ(3k, k=1 to n) = 3n(n+1)/2 (may fail if scaling not derived)',
+        inductionHypothesis: 'Sum(Mult(Constant(3),k),Constant(1),Variable(n)) = Mult(Constant(3),Div(Mult(Variable(n),Add(Variable(n),Constant(1))),Constant(2)))',
+        shouldSucceed: false
+    },
+    {
+        name: 'Sum of k (reordered RHS)',
+        description: 'Σ(k, k=1 to n) = (n+1)n/2',
+        inductionHypothesis: 'Sum(k,Constant(1),Variable(n)) = Div(Mult(Add(Variable(n),Constant(1)),Variable(n)),Constant(2))',
+        shouldSucceed: true
+    },
+    {
+        name: 'Sum of constants to variable (expected fail)',
+        description: 'Σ(1, k=1 to n) = n+0 (sanity, may fail if simplification not enough)',
+        inductionHypothesis: 'Sum(Constant(1),Constant(1),Variable(n)) = Add(Variable(n),Constant(0))',
+        shouldSucceed: false
+    },
 ];
 exports.testCases = testCases;
+function runInductionWithTimeout(input, timeoutMs) {
+    return new Promise((resolve) => {
+        const workerPath = path.join(__dirname, 'inductionWorker.js');
+        const worker = new worker_threads_1.Worker(workerPath, { workerData: input });
+        let settled = false;
+        const timeout = setTimeout(() => {
+            if (settled)
+                return;
+            settled = true;
+            worker.terminate().catch(() => undefined);
+            resolve({ timedOut: true });
+        }, timeoutMs);
+        worker.on('message', (message) => {
+            if (settled)
+                return;
+            settled = true;
+            clearTimeout(timeout);
+            resolve(message);
+        });
+        worker.on('error', (err) => {
+            if (settled)
+                return;
+            settled = true;
+            clearTimeout(timeout);
+            resolve({ error: String(err) });
+        });
+        worker.on('exit', (code) => {
+            if (settled)
+                return;
+            if (code !== 0) {
+                settled = true;
+                clearTimeout(timeout);
+                resolve({ error: `Worker exited with code ${code}` });
+            }
+        });
+    });
+}
 function runTest(testCase, relations) {
-    const startTime = Date.now();
-    try {
-        // Suppress console output during tests
-        const originalLog = console.log;
-        const logs = [];
-        console.log = (...args) => logs.push(args.join(' '));
+    return __awaiter(this, void 0, void 0, function* () {
+        const startTime = Date.now();
         const input = {
             relations,
             inductionHypothesis: testCase.inductionHypothesis
         };
-        const result = (0, index_1.runInduction)(input);
-        console.log = originalLog;
-        const succeeded = result.successfulBranch !== null;
+        const response = yield runInductionWithTimeout(input, 10000);
+        const duration = Date.now() - startTime;
+        if (response.timedOut) {
+            return {
+                name: testCase.name,
+                passed: false,
+                expected: testCase.shouldSucceed,
+                details: 'Timed out after 10s',
+                duration
+            };
+        }
+        if (response.error) {
+            return {
+                name: testCase.name,
+                passed: !testCase.shouldSucceed,
+                expected: testCase.shouldSucceed,
+                details: `Error: ${response.error}`,
+                duration
+            };
+        }
+        const result = response.result;
+        const succeeded = (result === null || result === void 0 ? void 0 : result.successfulBranch) !== null;
         const passed = succeeded === testCase.shouldSucceed;
         return {
             name: testCase.name,
@@ -103,69 +219,64 @@ function runTest(testCase, relations) {
             details: succeeded
                 ? `Found proof with ${result.successfulBranchLatex.length} steps`
                 : 'No proof found',
-            duration: Date.now() - startTime
+            duration
         };
-    }
-    catch (error) {
-        console.log = console.log; // Restore in case of error
-        return {
-            name: testCase.name,
-            passed: !testCase.shouldSucceed, // If we expected failure, exception counts as pass
-            expected: testCase.shouldSucceed,
-            details: `Error: ${error instanceof Error ? error.message : String(error)}`,
-            duration: Date.now() - startTime
-        };
-    }
+    });
 }
 function runAllTests() {
-    console.log('═'.repeat(60));
-    console.log('  INDUCTION PROVER TEST SUITE');
-    console.log('═'.repeat(60));
-    console.log();
-    // Load relations from example.ind
-    console.log('Loading relations from example.ind...');
-    const relations = loadRelations();
-    console.log(`Loaded ${relations.length} relations\n`);
-    const results = [];
-    for (const testCase of testCases) {
-        process.stdout.write(`Testing: ${testCase.name}... `);
-        const result = runTest(testCase, relations);
-        results.push(result);
-        if (result.passed) {
-            console.log(`✓ PASSED (${result.duration}ms)`);
+    return __awaiter(this, void 0, void 0, function* () {
+        console.log('═'.repeat(60));
+        console.log('  INDUCTION PROVER TEST SUITE');
+        console.log('═'.repeat(60));
+        console.log();
+        // Load relations from example.ind
+        console.log('Loading relations from example.ind...');
+        const relations = loadRelations();
+        console.log(`Loaded ${relations.length} relations\n`);
+        const results = [];
+        for (const testCase of testCases) {
+            process.stdout.write(`Testing: ${testCase.name}... `);
+            const result = yield runTest(testCase, relations);
+            results.push(result);
+            if (result.passed) {
+                console.log(`✓ PASSED (${result.duration}ms)`);
+            }
+            else {
+                console.log(`✗ FAILED (${result.duration}ms)`);
+            }
+            console.log(`  Description: ${testCase.description}`);
+            console.log(`  ${result.details}`);
+            console.log();
+        }
+        // Summary
+        const passed = results.filter(r => r.passed).length;
+        const failed = results.filter(r => !r.passed).length;
+        const totalTime = results.reduce((sum, r) => sum + r.duration, 0);
+        console.log('═'.repeat(60));
+        console.log('  SUMMARY');
+        console.log('═'.repeat(60));
+        console.log(`  Total:  ${results.length} tests`);
+        console.log(`  Passed: ${passed} ✓`);
+        console.log(`  Failed: ${failed} ✗`);
+        console.log(`  Time:   ${totalTime}ms`);
+        console.log('═'.repeat(60));
+        if (failed > 0) {
+            console.log('\nFailed tests:');
+            for (const result of results.filter(r => !r.passed)) {
+                console.log(`  - ${result.name}: ${result.details}`);
+            }
+            process.exit(1);
         }
         else {
-            console.log(`✗ FAILED (${result.duration}ms)`);
+            console.log('\nAll tests passed! 🎉');
+            process.exit(0);
         }
-        console.log(`  Description: ${testCase.description}`);
-        console.log(`  ${result.details}`);
-        console.log();
-    }
-    // Summary
-    const passed = results.filter(r => r.passed).length;
-    const failed = results.filter(r => !r.passed).length;
-    const totalTime = results.reduce((sum, r) => sum + r.duration, 0);
-    console.log('═'.repeat(60));
-    console.log('  SUMMARY');
-    console.log('═'.repeat(60));
-    console.log(`  Total:  ${results.length} tests`);
-    console.log(`  Passed: ${passed} ✓`);
-    console.log(`  Failed: ${failed} ✗`);
-    console.log(`  Time:   ${totalTime}ms`);
-    console.log('═'.repeat(60));
-    if (failed > 0) {
-        console.log('\nFailed tests:');
-        for (const result of results.filter(r => !r.passed)) {
-            console.log(`  - ${result.name}: ${result.details}`);
-        }
-        process.exit(1);
-    }
-    else {
-        console.log('\nAll tests passed! 🎉');
-        process.exit(0);
-    }
+    });
 }
 // Run if this is the main module
 if (require.main === module) {
-    runAllTests();
+    runAllTests().catch((error) => {
+        console.error(`Test runner error: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
+    });
 }

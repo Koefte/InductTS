@@ -37,7 +37,21 @@ exports.parseInductionInput = parseInductionInput;
 exports.runInduction = runInduction;
 exports.toLatexString = toLatexString;
 const fs = __importStar(require("fs"));
-const humanNotationParser_1 = require("./humanNotationParser");
+const math = __importStar(require("mathjs"));
+function parseRelation(relationStr) {
+    // Handle "where" clauses: "a = b where c = d, e = f" or "a = b where c = d and e = f"
+    let whereIndex = relationStr.indexOf(' where ');
+    let mainPart = relationStr;
+    let conditions = [];
+    if (whereIndex !== -1) {
+        mainPart = relationStr.substring(0, whereIndex);
+        const condPart = relationStr.substring(whereIndex + 7).trim(); // skip " where "
+        // Split by both commas and "and"
+        conditions = condPart.split(/\s*(?:,|\s+and\s+)\s*/).map(c => c.trim()).filter(c => c.length > 0);
+    }
+    const [left, right] = mainPart.split('=').map(s => s.trim());
+    return { left, right, conditions: conditions.length > 0 ? conditions : undefined };
+}
 function parseInductionInput(fileContent) {
     const statements = fileContent.split('\n').filter(line => line.trim() !== '');
     const relations = [];
@@ -60,8 +74,27 @@ function parseInductionInput(fileContent) {
                 relations.push(statement);
             }
             else {
-                // Parse human notation to Lisp notation
-                const lispNotation = (0, humanNotationParser_1.parseEquation)(statement);
+                // Parse human notation to Lisp notation, handling where clauses
+                const parsed = parseRelation(statement);
+                let lispNotation = '';
+                if (parsed.conditions && parsed.conditions.length > 0) {
+                    // Convert conditions to Lisp as well
+                    const { parseEquation } = require('./humanNotationParser');
+                    const conditionLisp = parsed.conditions.map((cond) => {
+                        return parseEquation(cond);
+                    }).join(', ');
+                    // Reconstruct with conditions
+                    const { humanToLisp } = require('./humanNotationParser');
+                    const leftLisp = humanToLisp(parsed.left, { wrapVariables: false });
+                    const rightLisp = humanToLisp(parsed.right, { wrapVariables: false });
+                    lispNotation = `${leftLisp} = ${rightLisp} where ${conditionLisp}`;
+                }
+                else {
+                    const { humanToLisp } = require('./humanNotationParser');
+                    const leftLisp = humanToLisp(parsed.left, { wrapVariables: false });
+                    const rightLisp = humanToLisp(parsed.right, { wrapVariables: false });
+                    lispNotation = `${leftLisp} = ${rightLisp}`;
+                }
                 relations.push(lispNotation);
             }
         }
@@ -175,6 +208,43 @@ function printTree(tree, depth = 0) {
     console.log(' '.repeat(depth) + tree.value);
     for (const child of tree.children) {
         printTree(child, depth + 2);
+    }
+}
+function solveConditions(conditions, variableMap) {
+    if (!conditions || conditions.length === 0)
+        return variableMap;
+    try {
+        // For each condition, try to solve for unknown variables
+        const result = new Map(variableMap);
+        for (const condition of conditions) {
+            const [left, right] = condition.split('=').map(s => s.trim());
+            if (!left || !right)
+                continue;
+            // Substitute known variables into the condition
+            let lhs = left;
+            let rhs = right;
+            for (const [key, value] of result.entries()) {
+                const regex = new RegExp(`\\b${key}\\b`, 'g');
+                lhs = lhs.replace(regex, `(${value})`);
+                rhs = rhs.replace(regex, `(${value})`);
+            }
+            // Try to solve for any remaining unknowns
+            // For now, we'll try to evaluate and see if they're equal
+            try {
+                const lhsVal = math.evaluate(lhs);
+                const rhsVal = math.evaluate(rhs);
+                if (Math.abs(lhsVal - rhsVal) > 1e-10) {
+                    return null; // Condition doesn't hold
+                }
+            }
+            catch (e) {
+                // If we can't evaluate, skip (might be solved in a later iteration)
+            }
+        }
+        return result;
+    }
+    catch (e) {
+        return null;
     }
 }
 function matches(nodeTree, patternTree) {
@@ -345,18 +415,46 @@ function applyRelation(nodeTree, relation) {
     if (!relation) {
         return treeToString(nodeTree);
     }
-    const [left, right] = relation.split('=').map((s) => s.trim());
+    // Extract conditions if present (handle "where" clauses)
+    let mainRelation = relation;
+    let conditions = [];
+    const whereIndex = relation.indexOf(' where ');
+    if (whereIndex !== -1) {
+        mainRelation = relation.substring(0, whereIndex);
+        const condStr = relation.substring(whereIndex + 7);
+        conditions = condStr.split(',').map(s => s.trim());
+    }
+    const [left, right] = mainRelation.split('=').map((s) => s.trim());
     if (!left || !right) {
         return treeToString(nodeTree);
     }
     const leftTree = constructTree(left);
     const workTree = cloneTree(nodeTree);
     const originalString = treeToString(nodeTree);
+    // Debug logging for conditional relations
+    if (conditions.length > 0) {
+        console.log(`[DEBUG] Attempting to apply conditional relation:`);
+        console.log(`  Pattern: ${left} = ${right}`);
+        console.log(`  Conditions: ${conditions.join(", ")}`);
+        console.log(`  Expression: ${originalString}`);
+    }
     // Search for matching subtree and replace
     const findAndReplace = (subtree, depth = 0) => {
         // Try to match current subtree
         try {
-            const variableMap = matches(cloneTree(subtree), cloneTree(leftTree));
+            let variableMap = matches(cloneTree(subtree), cloneTree(leftTree));
+            // If there are conditions, try to solve them
+            if (conditions.length > 0) {
+                console.log(`[DEBUG] Pattern matched at depth ${depth}, checking conditions...`);
+                console.log(`  Variable bindings:`, Array.from(variableMap.entries()));
+                const solved = solveConditions(conditions, variableMap);
+                if (!solved) {
+                    console.log(`[DEBUG] Conditions NOT satisfied, backtracking`);
+                    throw new Error("Conditions not satisfied");
+                }
+                console.log(`[DEBUG] Conditions SATISFIED! Applying rule.`);
+                variableMap = solved;
+            }
             const replacedExpr = putVariables(right, variableMap);
             const replacedTree = constructTree(replacedExpr);
             // Replace the subtree with the result
