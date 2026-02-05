@@ -24,6 +24,3 @@ Add(a, Mult(n, a)) = Mult(Add(n, Constant(1)), a)
 Mult(Add(a, b), Add(a, b)) = Add(Mult(a, a), Add(Mult(Constant(2), Mult(a, b)), Mult(b, b)))
 Sum(body,from,Add(Variable(n),Constant(1))) = Add(Sum(body,from,n), body\Add(n,Constant(1))) 
 
-induction_hypothesis:
-
-Sum(Subtract(Mult(k,Constant(2)),Constant(1)),Constant(1),Variable(n)) = Mult(Variable(n),Variable(n))

@@ -1,4 +1,10 @@
 {
+  "scripts": {
+    "dev": "tsc -w",
+    "build": "tsc",
+    "serve": "node dist/server.js",
+    "test": "node dist/tests.js"
+  },
   "dependencies": {
     "express": "^4.19.2"
   },
