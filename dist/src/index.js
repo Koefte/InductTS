@@ -265,6 +265,9 @@ function solveConditions(conditions, variableMap) {
         // Try to solve for unknowns using mathjs
         if (unknowns.size > 0) {
             const unknownList = Array.from(unknowns);
+            console.log(`[DEBUG] Attempting to solve for unknowns: ${unknownList.join(', ')}`);
+            console.log(`[DEBUG] Variable map:`, Array.from(result.entries()));
+            console.log(`[DEBUG] Processed Conditions:`, processedConditions.map(c => `${c === null || c === void 0 ? void 0 : c.lhs} = ${c === null || c === void 0 ? void 0 : c.rhs}`));
             try {
                 // Smart solver for systems of equations
                 // Special case: Vieta's formulas for x*y = p and x+y = s
@@ -501,7 +504,7 @@ function matches(nodeTree, patternTree) {
             return variableMap;
         }
         // Don't match complex expressions
-        return null;
+        throw new Error(`Variable(${patternVarName}) can only match bare variable, not ${treeToString(nodeTree)}`);
     }
     // Special handling for Constant(x) in pattern - should only match that constant
     if (patternTree.value === "Constant" && patternTree.children.length === 1) {
@@ -515,23 +518,56 @@ function matches(nodeTree, patternTree) {
             nodeTree.children[0].value === patternConstValue) {
             return variableMap;
         }
-        return null;
+        throw new Error(`Constant(${patternConstValue}) does not match ${treeToString(nodeTree)}`);
     }
     // Check that values match
     if (nodeTree.value != patternTree.value) {
-        return null;
+        throw new Error(`Value mismatch: ${nodeTree.value} != ${patternTree.value}`);
     }
     // Check structural equality - same number of children
     if (nodeTree.children.length != patternTree.children.length) {
-        return null;
+        throw new Error("Child length mismatch");
+    }
+    // Recursively match children
+    // For commutative operations (Mult, Add), try all permutations
+    if ((nodeTree.value === "Mult" || nodeTree.value === "Add") && nodeTree.children.length === 2) {
+        try {
+            // Try original order first
+            const map1 = new Map();
+            const child0Match = matches(nodeTree.children[0], patternTree.children[0]);
+            for (const [key, value] of child0Match.entries()) {
+                map1.set(key, value);
+            }
+            const child1Match = matches(nodeTree.children[1], patternTree.children[1]);
+            for (const [key, value] of child1Match.entries()) {
+                map1.set(key, value);
+            }
+            return map1;
+        }
+        catch (e1) {
+            // Try swapped order
+            try {
+                const map2 = new Map();
+                const child0Match = matches(nodeTree.children[0], patternTree.children[1]);
+                for (const [key, value] of child0Match.entries()) {
+                    map2.set(key, value);
+                }
+                const child1Match = matches(nodeTree.children[1], patternTree.children[0]);
+                for (const [key, value] of child1Match.entries()) {
+                    map2.set(key, value);
+                }
+                return map2;
+            }
+            catch (e2) {
+                throw e1; // Throw original error if both fail
+            }
+        }
     }
     // Non-commutative: match children in order
     for (let i = 0; i < nodeTree.children.length; i++) {
         let nodeChild = nodeTree.children[i];
         let patternChild = patternTree.children[i];
         const childMatches = matches(nodeChild, patternChild);
-        if (!childMatches)
-            return null;
         for (const [key, value] of childMatches.entries()) {
             variableMap.set(key, value);
         }
@@ -642,11 +678,18 @@ function applyRelation(nodeTree, relation) {
     const leftTree = constructTree(left);
     const workTree = cloneTree(nodeTree);
     const originalString = treeToString(nodeTree);
+    // Debug logging for conditional relations
+    if (conditions.length > 0) {
+        console.log(`[DEBUG] Attempting to apply conditional relation:`);
+        console.log(`  Pattern: ${left} = ${right}`);
+        console.log(`  Conditions: ${conditions.join(", ")}`);
+        console.log(`  Expression: ${originalString}`);
+    }
     // Search for matching subtree and replace
     const findAndReplace = (subtree, depth = 0) => {
         // Try to match current subtree
-        let variableMap = matches(cloneTree(subtree), cloneTree(leftTree));
-        if (variableMap !== null) {
+        try {
+            let variableMap = matches(cloneTree(subtree), cloneTree(leftTree));
             // If there are conditions, try to solve them
             if (conditions.length > 0) {
                 console.log(`[DEBUG] Pattern matched at depth ${depth}, checking conditions...`);
@@ -670,13 +713,15 @@ function applyRelation(nodeTree, relation) {
             subtree.children = replacement.children;
             return true;
         }
-        // Try children
-        for (const child of subtree.children) {
-            if (findAndReplace(child, depth + 1)) {
-                return true;
+        catch (e) {
+            // Try children
+            for (const child of subtree.children) {
+                if (findAndReplace(child, depth + 1)) {
+                    return true;
+                }
             }
+            return false;
         }
-        return false;
     };
     // Start search from root or first child
     if (workTree.value === "root" && workTree.children.length > 0) {
@@ -997,7 +1042,6 @@ function applyAllRelations(node, relations, inductionHypothesis) {
     const applyHypResult = applyRelation(nodeTree, `${hypLeft} = ${hypRight}`);
     if (applyHypResult && applyHypResult != node) {
         console.log("Got here via induction hypothesis");
-        console.log(`Induction hypothesis: ${hypLeft} = ${hypRight}`);
         console.log("  result: " + applyHypResult);
         printTree(constructTree(applyHypResult));
         results.push(applyHypResult);
@@ -1141,13 +1185,29 @@ function runInduction(input) {
     console.log("Original RHS: " + hypRightOriginal);
     console.log("After substitution (structure): " + treeToString(hypRightSubstituted));
     console.log("After substitution (math): " + hypRightMath);
-    console.log("LHS after substitution (math): " + toMathString(hypLeft));
     console.log("===================================\n");
+    // Normalize math strings by removing spacing differences and simplifying additions like (n+1+1) to (n+2)
+    function normalizeMathString(math) {
+        let result = math;
+        // Replace patterns like (n + 1 + 1) with (n + 2)
+        result = result.replace(/\(n \+ 1 \+ 1\)/g, "(n + 2)");
+        return result;
+    }
     for (let i = 0; i < 100; i++) {
         let nextFrontier = [];
         const seenInThisIteration = new Set();
         for (const node of frontier) {
             const exprStr = treeToString(node.value);
+            const exprMath = toMathString(node.value);
+            const normExprMath = normalizeMathString(exprMath);
+            const normHypMath = normalizeMathString(hypRightMath);
+            // Check if we've reached the induction hypothesis RHS (by comparing normalized math notation)
+            if (normExprMath === normHypMath) {
+                console.log("✓ Reached induction hypothesis goal!");
+                successfulBranch = buildSuccessfulBranch(node);
+                frontier = [];
+                break;
+            }
             const derived = applyAllRelations(exprStr, relations, inductionHypothesis);
             for (const result of derived) {
                 const normalized = resolveSubstitutions(result);
@@ -1169,7 +1229,8 @@ function runInduction(input) {
                 seenInThisIteration.add(childStr);
                 // Check if this result matches the hypothesis goal
                 const childMath = toMathString(child);
-                if (childMath === hypRightMath) {
+                const normChildMath = normalizeMathString(childMath);
+                if (normChildMath === normHypMath) {
                     console.log("✓ Reached induction hypothesis goal!");
                     const derivNode = {
                         value: child,
@@ -1218,8 +1279,9 @@ if (require.main === module) {
         const isLikelyLisp = (value) => {
             if (!value)
                 return false;
+            const lispFunctionPattern = /\b[A-Z][A-Za-z0-9_]*\s*\(/;
             const lispKeywordsPattern = /\b(Constant|Variable|Add|Subtract|Mult|Div|Sum)\s*\(/;
-            return lispKeywordsPattern.test(value);
+            return lispFunctionPattern.test(value) || lispKeywordsPattern.test(value);
         };
         if (isLikelyLisp(hypothesisInput)) {
             // Already Lisp notation, use directly

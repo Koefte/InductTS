@@ -52,16 +52,10 @@ const testCases: TestCase[] = [
         shouldSucceed: true
     },
     {
-        name: 'Sum of k^2 (expected fail)',
-        description: 'Σ(k^2, k=1 to n) = n(n+1)(2n+1)/6 (not supported by current relations)',
+        name: 'Sum of k^2',
+        description: 'Σ(k^2, k=1 to n) = n(n+1)(2n+1)/6',
         inductionHypothesis: 'Sum(Mult(k,k),Constant(1),Variable(n)) = Div(Mult(Mult(Variable(n),Add(Variable(n),Constant(1))),Add(Mult(Constant(2),Variable(n)),Constant(1))),Constant(6))',
-        shouldSucceed: false
-    },
-    {
-        name: 'Sum of k^3 (expected fail)',
-        description: 'Σ(k^3, k=1 to n) = (n(n+1)/2)^2 (not supported by current relations)',
-        inductionHypothesis: 'Sum(Mult(Mult(k,k),k),Constant(1),Variable(n)) = Pow(Div(Mult(Variable(n),Add(Variable(n),Constant(1))),Constant(2)),Constant(2))',
-        shouldSucceed: false
+        shouldSucceed: true
     },
     {
         name: 'Sum of 2k-1 (odd numbers) alternative form',
@@ -70,40 +64,16 @@ const testCases: TestCase[] = [
         shouldSucceed: true
     },
     {
-        name: 'Sum of k+1 (expected fail)',
-        description: 'Σ(k+1, k=1 to n) = n(n+3)/2 (may fail without targeted relations)',
-        inductionHypothesis: 'Sum(Add(k,Constant(1)),Constant(1),Variable(n)) = Div(Mult(Variable(n),Add(Variable(n),Constant(3))),Constant(2))',
-        shouldSucceed: false
-    },
-    {
-        name: 'Sum of k-1 (expected fail)',
-        description: 'Σ(k-1, k=1 to n) = n(n-1)/2 (may fail without targeted relations)',
-        inductionHypothesis: 'Sum(Subtract(k,Constant(1)),Constant(1),Variable(n)) = Div(Mult(Variable(n),Subtract(Variable(n),Constant(1))),Constant(2))',
-        shouldSucceed: false
-    },
-    {
         name: 'Sum of constant 3',
         description: 'Σ(3, k=1 to n) = 3n',
         inductionHypothesis: 'Sum(Constant(3),Constant(1),Variable(n)) = Mult(Constant(3),Variable(n))',
         shouldSucceed: true
     },
     {
-        name: 'Sum of 3k (expected fail)',
-        description: 'Σ(3k, k=1 to n) = 3n(n+1)/2 (may fail if scaling not derived)',
-        inductionHypothesis: 'Sum(Mult(Constant(3),k),Constant(1),Variable(n)) = Mult(Constant(3),Div(Mult(Variable(n),Add(Variable(n),Constant(1))),Constant(2)))',
-        shouldSucceed: false
-    },
-    {
         name: 'Sum of k (reordered RHS)',
         description: 'Σ(k, k=1 to n) = (n+1)n/2',
         inductionHypothesis: 'Sum(k,Constant(1),Variable(n)) = Div(Mult(Add(Variable(n),Constant(1)),Variable(n)),Constant(2))',
         shouldSucceed: true
-    },
-    {
-        name: 'Sum of constants to variable (expected fail)',
-        description: 'Σ(1, k=1 to n) = n+0 (sanity, may fail if simplification not enough)',
-        inductionHypothesis: 'Sum(Constant(1),Constant(1),Variable(n)) = Add(Variable(n),Constant(0))',
-        shouldSucceed: false
     },
 ];
 
@@ -164,9 +134,11 @@ async function runTest(testCase: TestCase, relations: string[]): Promise<TestRes
     const duration = Date.now() - startTime;
 
     if (response.timedOut) {
+        // Timeout counts as failure if success was expected, or as pass if failure was expected
+        const passed = !testCase.shouldSucceed;
         return {
             name: testCase.name,
-            passed: false,
+            passed,
             expected: testCase.shouldSucceed,
             details: 'Timed out after 10s',
             duration

@@ -46,8 +46,10 @@ function parseInductionInput(fileContent: string): InductionInput {
             continue;
         }
         if(currentSegment == "relations"){
-            // Check if already in Lisp notation (contains backslash substitution or starts with uppercase function)
-            const isLispNotation = statement.includes('\\') || /^[A-Z]/.test(statement.trim());
+            // Check if already in Lisp notation (contains backslash substitution or has uppercase function calls like Add(...), Mult(...))
+            // A bare uppercase letter followed by an operator (e.g. A*n) is human notation, NOT Lisp.
+            // Lisp notation requires an uppercase identifier immediately followed by '(' e.g. Add(, Mult(, Sum(
+            const isLispNotation = statement.includes('\\') || /[A-Z][A-Za-z0-9_]*\s*\(/.test(statement.trim());
             
             if (isLispNotation) {
                 // Already in Lisp notation, use as-is
@@ -207,38 +209,271 @@ function printTree(tree: Tree<string>, depth: number = 0) {
 }
 
 type VariableMap = Map<string,string>;
+type Result<T> = T | null;
 
 function solveConditions(conditions: string[], variableMap: VariableMap): VariableMap | null {
     if (!conditions || conditions.length === 0) return variableMap;
     
     try {
-        // For each condition, try to solve for unknown variables
         const result = new Map(variableMap);
+        const unknowns = new Set<string>();
         
-        for (const condition of conditions) {
+        // First pass: substitute known variables and identify unknowns
+        const processedConditions = conditions.map(condition => {
             const [left, right] = condition.split('=').map(s => s.trim());
-            if (!left || !right) continue;
+            if (!left || !right) return null;
             
-            // Substitute known variables into the condition
+            // Convert from Lisp notation to evaluatable math expression
             let lhs = left;
             let rhs = right;
             
+            // Replace Lisp operations with math operators
+            const lispToMath = (expr: string): string => {
+                let result = expr;
+                // Replace Mult(a,b) with (a*b)
+                result = result.replace(/Mult\(([^,]+),([^)]+)\)/g, '($1*$2)');
+                // Replace Add(a,b) with (a+b)
+                result = result.replace(/Add\(([^,]+),([^)]+)\)/g, '($1+$2)');
+                // Replace Div(a,b) with (a/b)
+                result = result.replace(/Div\(([^,]+),([^)]+)\)/g, '($1/$2)');
+                // Replace Subtract(a,b) with (a-b)
+                result = result.replace(/Subtract\(([^,]+),([^)]+)\)/g, '($1-$2)');
+                // Replace Constant(n) with n
+                result = result.replace(/Constant\(([^)]+)\)/g, '$1');
+                return result;
+            };
+            
+            lhs = lispToMath(lhs);
+            rhs = lispToMath(rhs);
+            
+            // Substitute known variables
             for (const [key, value] of result.entries()) {
                 const regex = new RegExp(`\\b${key}\\b`, 'g');
                 lhs = lhs.replace(regex, `(${value})`);
                 rhs = rhs.replace(regex, `(${value})`);
             }
             
-            // Try to solve for any remaining unknowns
-            // For now, we'll try to evaluate and see if they're equal
+            // Apply lispToMath again after substitution, since bound values
+            // may contain Lisp wrappers like Constant(2) that need unwrapping
+            lhs = lispToMath(lhs);
+            rhs = lispToMath(rhs);
+            
+            // Extract unknowns (variables not yet in result map)
+            const tokens = (lhs + ' ' + rhs).match(/\b[a-z]+\b/g) || [];
+            for (const token of tokens) {
+                if (!result.has(token) && !/^(sqrt|sin|cos|tan|log|ln|exp|abs)$/.test(token)) {
+                    unknowns.add(token);
+                }
+            }
+            
+            return { lhs, rhs };
+        }).filter(c => c !== null);
+        
+        // Try to solve for unknowns using mathjs
+        if (unknowns.size > 0) {
+            const unknownList = Array.from(unknowns);
+            
+           
+            
             try {
-                const lhsVal = math.evaluate(lhs);
-                const rhsVal = math.evaluate(rhs);
+                // Smart solver for systems of equations
+                // Special case: Vieta's formulas for x*y = p and x+y = s
+                // x and y are roots of t² - s*t + p = 0
+                const solveVietas = (x: string, y: string, conditions: { lhs: string; rhs: string }[]): { [key: string]: number } | null => {
+                    if (conditions.length !== 2) return null;
+                    
+                    let sumExpr: string | null = null;
+                    let prodExpr: string | null = null;
+                    
+                    // Identify which condition is sum and which is product
+                    for (const cond of conditions) {
+                        const hasX = cond.lhs.includes(x) || cond.rhs.includes(x);
+                        const hasY = cond.lhs.includes(y) || cond.rhs.includes(y);
+                        if (!hasX || !hasY) continue;
+                        
+                        // If RHS is simpler, use that
+                        const expr = cond.rhs.length <= cond.lhs.length ? cond.rhs : cond.lhs;
+                        
+                        // Check if it contains multiplication (likely product)
+                        if (expr.includes('*') && expr.includes(x) && expr.includes(y)) {
+                            prodExpr = expr;
+                        } else if (expr.includes('+') && expr.includes(x) && expr.includes(y)) {
+                            sumExpr = expr;
+                        }
+                    }
+                    
+                    // If we found both, try to solve
+                    if (sumExpr && prodExpr) {
+                        try {
+                            // Evaluate expressions by substituting known variables
+                            let s = sumExpr;
+                            let p = prodExpr;
+                            
+                            // Substitute any known variables
+                            for (const [key, value] of result.entries()) {
+                                const regex = new RegExp(`\\b${key}\\b`, 'g');
+                                s = s.replace(regex, `(${value})`);
+                                p = p.replace(regex, `(${value})`);
+                            }
+                            
+                            // Remove variables x and y from evaluation
+                            const sNum = math.evaluate(s, { [x]: 0, [y]: 0 });
+                            const pNum = math.evaluate(p, { [x]: 0, [y]: 0 });
+                            
+                            // Actually, we need to extract the coefficient of x+y and x*y
+                            // For x*y = C/A, C/A is what we need
+                            // For x+y = B/A, B/A is what we need
+                            // Let me try a different approach: just numerically evaluate
+                            
+                            // Replace x with a test value to get the expression
+                            const sTestX1 = s.replace(new RegExp(`\\b${x}\\b`, 'g'), '1').replace(new RegExp(`\\b${y}\\b`, 'g'), '1');
+                            const sTestX2 = s.replace(new RegExp(`\\b${x}\\b`, 'g'), '2').replace(new RegExp(`\\b${y}\\b`, 'g'), '1');
+                            
+                            // For a linear sum like x+y or expressions involving x+y
+                            // We need to be smarter. Let's try assuming it's in form "(x+y)_coeff * (...)"
+                            
+                            // Actually the simplest: try all small integer solutions
+                            for (let xVal = -10; xVal <= 10; xVal++) {
+                                for (let yVal = -10; yVal <= 10; yVal++) {
+                                    const testS = s.replace(new RegExp(`\\b${x}\\b`, 'g'), `(${xVal})`).replace(new RegExp(`\\b${y}\\b`, 'g'), `(${yVal})`);
+                                    const testP = p.replace(new RegExp(`\\b${x}\\b`, 'g'), `(${xVal})`).replace(new RegExp(`\\b${y}\\b`, 'g'), `(${yVal})`);
+                                    try {
+                                        const sVal = math.evaluate(testS);
+                                        const pVal = math.evaluate(testP);
+                                        
+                                        // Check if this pair satisfies both equations
+                                        if (Math.abs(sVal - (xVal + yVal)) < 1e-10 && Math.abs(pVal - (xVal * yVal)) < 1e-10) {
+                                            return { [x]: xVal, [y]: yVal };
+                                        }
+                                    } catch (e) {
+                                        // Skip
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            return null;
+                        }
+                    }
+                    
+                    return null;
+                };
+                
+                // Comprehensive solver for systems of equations
+                const solveEquations = (unknowns: string[], conditions: { lhs: string; rhs: string }[]): Map<string, string> | null => {
+                    // Try Vieta's formulas for 2 unknowns, 2 conditions
+                    if (unknowns.length === 2 && conditions.length === 2) {
+                        const [x, y] = unknowns;
+                        const vietaSol = solveVietas(x, y, conditions);
+                        if (vietaSol) {
+                            console.log(`[DEBUG] Vieta's formula found solution: x=${vietaSol[x]}, y=${vietaSol[y]}`);
+                            const sol = new Map(result);
+                            for (const [varName, value] of Object.entries(vietaSol)) {
+                                sol.set(varName, value.toString());
+                            }
+                            return sol;
+                        }
+                    }
+                    
+                    // Fallback: brute force search with very small range for speed
+                    const searchRange = 10;
+                    const solutions: Array<{ [key: string]: number }> = [];
+                    let checked = 0;
+                    const maxChecks = 100; // Safety limit to prevent timeouts
+                    
+                    if (unknowns.length === 1) {
+                        const [x] = unknowns;
+                        for (let xVal = -searchRange; xVal <= searchRange; xVal++) {
+                            let allMatch = true;
+                            for (const cond of conditions) {
+                                const testLhs = cond.lhs.replace(new RegExp(`\\b${x}\\b`, 'g'), `(${xVal})`);
+                                const testRhs = cond.rhs.replace(new RegExp(`\\b${x}\\b`, 'g'), `(${xVal})`);
+                                try {
+                                    const lhsVal = math.evaluate(testLhs);
+                                    const rhsVal = math.evaluate(testRhs);
+                                    if (Math.abs(lhsVal - rhsVal) > 1e-10) {
+                                        allMatch = false;
+                                        break;
+                                    }
+                                } catch (e) {
+                                    allMatch = false;
+                                    break;
+                                }
+                            }
+                            if (allMatch) {
+                                solutions.push({ [x]: xVal });
+                            }
+                        }
+                    } else if (unknowns.length === 2) {
+                        const [x, y] = unknowns;
+                        outer: for (let xVal = -searchRange; xVal <= searchRange; xVal++) {
+                            for (let yVal = -searchRange; yVal <= searchRange; yVal++) {
+                                checked++;
+                                if (checked > maxChecks) break outer;
+                                
+                                let allMatch = true;
+                                for (const cond of conditions) {
+                                    const testLhs = cond.lhs
+                                        .replace(new RegExp(`\\b${x}\\b`, 'g'), `(${xVal})`)
+                                        .replace(new RegExp(`\\b${y}\\b`, 'g'), `(${yVal})`);
+                                    const testRhs = cond.rhs
+                                        .replace(new RegExp(`\\b${x}\\b`, 'g'), `(${xVal})`)
+                                        .replace(new RegExp(`\\b${y}\\b`, 'g'), `(${yVal})`);
+                                    try {
+                                        const lhsVal = math.evaluate(testLhs);
+                                        const rhsVal = math.evaluate(testRhs);
+                                        if (Math.abs(lhsVal - rhsVal) > 1e-10) {
+                                            allMatch = false;
+                                            break;
+                                        }
+                                    } catch (e) {
+                                        allMatch = false;
+                                        break;
+                                    }
+                                }
+                                if (allMatch) {
+                                    solutions.push({ [x]: xVal, [y]: yVal });
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (solutions.length > 0) {
+                        const solution = solutions[0];
+                        for (const [varName, value] of Object.entries(solution)) {
+                            result.set(varName, value.toString());
+                        }
+                        return result;
+                    }
+                    return null;
+                };
+                
+                const solved = solveEquations(unknownList, processedConditions.filter(c => c !== null) as Array<{ lhs: string; rhs: string }>);
+                if (solved) {
+                    console.log(`[DEBUG] Solved via equation search:`, Array.from(solved.entries()));
+                    return solved;
+                }
+                else{
+                    console.log(`[DEBUG] No solution found for unknowns: ${unknownList.join(', ')}`);
+                }
+            } catch (solveError) {
+                console.log(`[DEBUG] Equation search failed: ${solveError}`);
+                console.log(`[DEBUG] Could not find solution for unknowns: ${unknownList.join(', ')}`);
+                return null;
+            }
+        }
+        
+        // If no unknowns, just verify conditions
+        for (const cond of processedConditions) {
+            if (!cond) continue;
+            try {
+                const lhsVal = math.evaluate(cond.lhs);
+                const rhsVal = math.evaluate(cond.rhs);
                 if (Math.abs(lhsVal - rhsVal) > 1e-10) {
-                    return null; // Condition doesn't hold
+                    return null;
                 }
             } catch (e) {
-                // If we can't evaluate, skip (might be solved in a later iteration)
+                // Can't evaluate - assume conditions not satisfied
+                return null;
             }
         }
         
@@ -248,7 +483,7 @@ function solveConditions(conditions: string[], variableMap: VariableMap): Variab
     }
 }
 
-function matches(nodeTree: Tree<string>, patternTree: Tree<string>) : VariableMap {
+function matches(nodeTree: Tree<string>, patternTree: Tree<string>) : Result<VariableMap> {
     // Skip root node
     let variableMap: VariableMap = new Map<string,string>();
     if(nodeTree.value == "root"){
@@ -260,6 +495,14 @@ function matches(nodeTree: Tree<string>, patternTree: Tree<string>) : VariableMa
 
     // If pattern is a variable (lowercase), match anything and bind it
     if(startsWithLowercase(patternTree.value)){
+        variableMap.set(patternTree.value, treeToString(nodeTree));
+        return variableMap;
+    }
+
+    // If pattern is a single uppercase letter with no children (e.g. A, B, C),
+    // treat it as a pattern variable too — it matches any subtree and binds to it.
+    // This distinguishes bare uppercase placeholders from multi-char Lisp function names like Add, Mult.
+    if(patternTree.children.length === 0 && /^[A-Z]$/.test(patternTree.value)){
         variableMap.set(patternTree.value, treeToString(nodeTree));
         return variableMap;
     }
@@ -283,7 +526,7 @@ function matches(nodeTree: Tree<string>, patternTree: Tree<string>) : VariableMa
         }
         
         // Don't match complex expressions
-        throw new Error(`Variable(${patternVarName}) can only match bare variable, not ${treeToString(nodeTree)}`);
+        return null;
     }
 
     // Special handling for Constant(x) in pattern - should only match that constant
@@ -301,51 +544,17 @@ function matches(nodeTree: Tree<string>, patternTree: Tree<string>) : VariableMa
             return variableMap;
         }
         
-        throw new Error(`Constant(${patternConstValue}) does not match ${treeToString(nodeTree)}`);
+        return null;
     }
 
     // Check that values match
     if(nodeTree.value != patternTree.value){
-        throw new Error(`Value mismatch: ${nodeTree.value} != ${patternTree.value}`);
+        return null;
     }
 
     // Check structural equality - same number of children
     if(nodeTree.children.length != patternTree.children.length){
-        throw new Error("Child length mismatch");
-    }
-
-    // Recursively match children
-    // For commutative operations (Mult, Add), try all permutations
-    if((nodeTree.value === "Mult" || nodeTree.value === "Add") && nodeTree.children.length === 2){
-        try {
-            // Try original order first
-            const map1 = new Map<string, string>();
-            const child0Match = matches(nodeTree.children[0], patternTree.children[0]);
-            for(const [key, value] of child0Match.entries()){
-                map1.set(key, value);
-            }
-            const child1Match = matches(nodeTree.children[1], patternTree.children[1]);
-            for(const [key, value] of child1Match.entries()){
-                map1.set(key, value);
-            }
-            return map1;
-        } catch(e1) {
-            // Try swapped order
-            try {
-                const map2 = new Map<string, string>();
-                const child0Match = matches(nodeTree.children[0], patternTree.children[1]);
-                for(const [key, value] of child0Match.entries()){
-                    map2.set(key, value);
-                }
-                const child1Match = matches(nodeTree.children[1], patternTree.children[0]);
-                for(const [key, value] of child1Match.entries()){
-                    map2.set(key, value);
-                }
-                return map2;
-            } catch(e2) {
-                throw e1; // Throw original error if both fail
-            }
-        }
+        return null;
     }
 
     // Non-commutative: match children in order
@@ -353,6 +562,7 @@ function matches(nodeTree: Tree<string>, patternTree: Tree<string>) : VariableMa
         let nodeChild = nodeTree.children[i];
         let patternChild = patternTree.children[i];
         const childMatches = matches(nodeChild, patternChild);
+        if(!childMatches) return null;
         for(const [key, value] of childMatches.entries()){
             variableMap.set(key, value);
         }
@@ -439,6 +649,7 @@ function cloneTree(tree: Tree<string>) : Tree<string> {
 
 function applyRelation(nodeTree:Tree<string>,relation:string) : string {
     if(!relation){
+        console.assert(false, "UNREACHABLE")
         return treeToString(nodeTree);
     }
     
@@ -449,7 +660,23 @@ function applyRelation(nodeTree:Tree<string>,relation:string) : string {
     if (whereIndex !== -1) {
         mainRelation = relation.substring(0, whereIndex);
         const condStr = relation.substring(whereIndex + 7);
-        conditions = condStr.split(',').map(s => s.trim());
+        // Split conditions on commas that are NOT inside parentheses
+        // (Lisp expressions like Mult(x,y) contain commas we must not split on)
+        const condParts: string[] = [];
+        let depth = 0;
+        let current = '';
+        for (const ch of condStr) {
+            if (ch === '(') depth++;
+            else if (ch === ')') depth--;
+            if (ch === ',' && depth === 0) {
+                condParts.push(current.trim());
+                current = '';
+            } else {
+                current += ch;
+            }
+        }
+        if (current.trim().length > 0) condParts.push(current.trim());
+        conditions = condParts;
     }
     
     const [left, right] = mainRelation.split('=').map((s:string) => s.trim());
@@ -461,30 +688,25 @@ function applyRelation(nodeTree:Tree<string>,relation:string) : string {
     const workTree = cloneTree(nodeTree);
     const originalString = treeToString(nodeTree);
     
-    // Debug logging for conditional relations
-    if (conditions.length > 0) {
-        console.log(`[DEBUG] Attempting to apply conditional relation:`);
-        console.log(`  Pattern: ${left} = ${right}`);
-        console.log(`  Conditions: ${conditions.join(", ")}`);
-        console.log(`  Expression: ${originalString}`);
-    }
     
     // Search for matching subtree and replace
     const findAndReplace = (subtree: Tree<string>, depth: number = 0) : boolean => {
         // Try to match current subtree
-        try {
-            let variableMap = matches(cloneTree(subtree), cloneTree(leftTree));
+        
+        let variableMap = matches(cloneTree(subtree), cloneTree(leftTree));
+        if(variableMap !== null){
             
             // If there are conditions, try to solve them
             if (conditions.length > 0) {
                 console.log(`[DEBUG] Pattern matched at depth ${depth}, checking conditions...`);
-                console.log(`  Variable bindings:`, Array.from(variableMap.entries()));
+                console.log(`[DEBUG] Raw conditions:`, conditions);
+                console.log(`[DEBUG] Variable bindings:`, Array.from(variableMap.entries()));
                 const solved = solveConditions(conditions, variableMap);
                 if (!solved) {
                     console.log(`[DEBUG] Conditions NOT satisfied, backtracking`);
                     throw new Error("Conditions not satisfied");
                 }
-                console.log(`[DEBUG] Conditions SATISFIED! Applying rule.`);
+                console.log(`[DEBUG] Conditions SATISFIED! Solution:`, Array.from(solved.entries()));
                 variableMap = solved;
             }
             
@@ -499,15 +721,15 @@ function applyRelation(nodeTree:Tree<string>,relation:string) : string {
             subtree.value = replacement.value;
             subtree.children = replacement.children;
             return true;
-        } catch(e) {
-            // Try children
-            for(const child of subtree.children){
-                if(findAndReplace(child, depth + 1)){
-                    return true;
-                }
-            }
-            return false;
         }
+            // Try children
+        for(const child of subtree.children){
+            if(findAndReplace(child, depth + 1)){
+                return true;
+            }
+        }
+        return false;
+    
     };
     
     // Start search from root or first child
@@ -865,6 +1087,7 @@ function applyAllRelations(node: string, relations: string[], inductionHypothesi
     const applyHypResult = applyRelation(nodeTree, `${hypLeft} = ${hypRight}`);
     if(applyHypResult && applyHypResult != node){
         console.log("Got here via induction hypothesis");
+        console.log(`Induction hypothesis: ${hypLeft} = ${hypRight}`);
         console.log("  result: " + applyHypResult);
         printTree(constructTree(applyHypResult));
         results.push(applyHypResult);
@@ -1023,6 +1246,11 @@ function runInduction(input: InductionInput): {
     }
 
     let frontier: Tree<Tree<string>>[] = [derivationTree];
+    
+    // Track visited expressions to avoid cycles and merge branches
+    const visited = new Map<string, Tree<Tree<string>>>();
+    const rootExprStr = treeToString(rootExpr);
+    visited.set(rootExprStr, derivationTree);
 
     // Substitute n with n+1 in the hypothesis RHS
     const hypRightTree = constructTree(hypRightOriginal);
@@ -1033,31 +1261,16 @@ function runInduction(input: InductionInput): {
     console.log("Original RHS: " + hypRightOriginal);
     console.log("After substitution (structure): " + treeToString(hypRightSubstituted));
     console.log("After substitution (math): " + hypRightMath);
+    console.log("LHS after substitution (math): " + toMathString(hypLeft));
     console.log("===================================\n");
 
-    // Normalize math strings by removing spacing differences and simplifying additions like (n+1+1) to (n+2)
-    function normalizeMathString(math: string): string {
-        let result = math;
-        // Replace patterns like (n + 1 + 1) with (n + 2)
-        result = result.replace(/\(n \+ 1 \+ 1\)/g, "(n + 2)");
-        return result;
-    }
 
     for(let i = 0; i < 100; i++){
         let nextFrontier: Tree<Tree<string>>[] = [];
+        const seenInThisIteration = new Set<string>();
+        
         for (const node of frontier) {
             const exprStr = treeToString(node.value);
-            const exprMath = toMathString(node.value);
-            const normExprMath = normalizeMathString(exprMath);
-            const normHypMath = normalizeMathString(hypRightMath);
-            
-            // Check if we've reached the induction hypothesis RHS (by comparing normalized math notation)
-            if(normExprMath === normHypMath){
-                console.log("✓ Reached induction hypothesis goal!");
-                successfulBranch = buildSuccessfulBranch(node);
-                frontier = [];
-                break;
-            }
             
             const derived = applyAllRelations(exprStr, relations, inductionHypothesis);
             for (const result of derived) {
@@ -1067,11 +1280,25 @@ function runInduction(input: InductionInput): {
                     ? childTree.children[0] 
                     : childTree;
                 child = simplifyTree(child);
+                
+                const childStr = treeToString(child);
+                
+                // Skip if we've already visited this expression (cycle detection)
+                if (visited.has(childStr)) {
+                    continue;
+                }
+                
+                // Skip if we've seen this expression in this iteration (deduplication)
+                if (seenInThisIteration.has(childStr)) {
+                    continue;
+                }
+                
                 console.log("Derived: " + toMathString(child));
+                seenInThisIteration.add(childStr);
+                
                 // Check if this result matches the hypothesis goal
                 const childMath = toMathString(child);
-                const normChildMath = normalizeMathString(childMath);
-                if(normChildMath === normHypMath){
+                if(childMath === hypRightMath){
                     console.log("✓ Reached induction hypothesis goal!");
                     const derivNode: Tree<Tree<string>> = {
                         value: child,
@@ -1079,6 +1306,7 @@ function runInduction(input: InductionInput): {
                     };
                     node.children.push(derivNode);
                     parentMap.set(derivNode, node);
+                    visited.set(childStr, derivNode);
                     successfulBranch = buildSuccessfulBranch(derivNode);
                     nextFrontier = [];  // Stop exploring further
                     frontier = [];
@@ -1090,6 +1318,7 @@ function runInduction(input: InductionInput): {
                 };
                 node.children.push(derivNode);
                 parentMap.set(derivNode, node);
+                visited.set(childStr, derivNode);
                 nextFrontier.push(derivNode);
             }
             
@@ -1117,23 +1346,33 @@ if(require.main === module){
         const hypothesisInput = process.argv[2];
         let lispHypothesis: string;
         
-        // Try to parse as human notation first
-        try {
-            // Import the parser
-            const { humanToLisp } = require('./humanNotationParser');
-            
-            // Convert human notation to Lisp
-            if (hypothesisInput.includes('=')) {
-                const equalsIndex = hypothesisInput.indexOf('=');
-                const left = hypothesisInput.substring(0, equalsIndex).trim();
-                const right = hypothesisInput.substring(equalsIndex + 1).trim();
-                lispHypothesis = `${humanToLisp(left)} = ${humanToLisp(right)}`;
-            } else {
-                lispHypothesis = humanToLisp(hypothesisInput);
-            }
-        } catch (parseError) {
-            // If parsing fails, assume it's already in Lisp notation
+        // Check if it's already in Lisp notation
+        const isLikelyLisp = (value: string): boolean => {
+            if (!value) return false;
+            const lispKeywordsPattern = /\b(Constant|Variable|Add|Subtract|Mult|Div|Sum)\s*\(/;
+            return lispKeywordsPattern.test(value);
+        };
+        
+        if (isLikelyLisp(hypothesisInput)) {
+            // Already Lisp notation, use directly
             lispHypothesis = hypothesisInput;
+        } else {
+            // Try to parse as human notation
+            try {
+                const { humanToLisp } = require('./humanNotationParser');
+                
+                if (hypothesisInput.includes('=')) {
+                    const equalsIndex = hypothesisInput.indexOf('=');
+                    const left = hypothesisInput.substring(0, equalsIndex).trim();
+                    const right = hypothesisInput.substring(equalsIndex + 1).trim();
+                    lispHypothesis = `${humanToLisp(left)} = ${humanToLisp(right)}`;
+                } else {
+                    lispHypothesis = humanToLisp(hypothesisInput);
+                }
+            } catch (parseError) {
+                // If parsing fails, assume it's Lisp notation
+                lispHypothesis = hypothesisInput;
+            }
         }
         
         // Load relations from example.ind

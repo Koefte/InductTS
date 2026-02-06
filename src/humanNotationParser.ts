@@ -56,14 +56,20 @@ function tokenizeHumanNotation(input: string): HumanToken[] {
             continue;
         }
 
-        // Identifiers (function names or special constructs like Sum, Variable, Constant)
+        // Identifiers starting with uppercase
+        // Single uppercase letters are constants, multi-char are functions (Sum, Add, etc.)
         if (/[A-Z]/.test(char)) {
             let identifier = '';
             while (i < input.length && /[a-zA-Z0-9_]/.test(input[i])) {
                 identifier += input[i];
                 i++;
             }
-            tokens.push({ type: HumanTokenType.Identifier, value: identifier });
+            // Single uppercase letter = constant when wrapVariables is false
+            if (identifier.length === 1) {
+                tokens.push({ type: HumanTokenType.Number, value: identifier });
+            } else {
+                tokens.push({ type: HumanTokenType.Identifier, value: identifier });
+            }
             continue;
         }
 
@@ -243,9 +249,13 @@ class Parser {
             throw new Error('Unexpected end of input');
         }
 
-        // Number literal
+        // Number literal or uppercase constant letter
         if (token.type === HumanTokenType.Number) {
             this.consume();
+            // If it's a single letter (not a digit), only wrap if not in relation mode
+            if (/^[A-Z]$/.test(token.value)) {
+                return this.wrapVariables ? `Constant(${token.value})` : token.value;
+            }
             return `Constant(${token.value})`;
         }
 
@@ -298,6 +308,9 @@ class Parser {
 
 /**
  * Convert human-readable mathematical notation to Lisp-like notation
+ * When wrapVariables is true: lowercase variables become Variable(x), numbers become Constant(n)
+ * When wrapVariables is false: lowercase variables stay bare, uppercase stay bare
+ * In relations, prefix a symbol with uppercase letter to keep it bare (like a, b, c for generic patterns)
  */
 export function humanToLisp(input: string, options?: { wrapVariables?: boolean }): string {
     const tokens = tokenizeHumanNotation(input);

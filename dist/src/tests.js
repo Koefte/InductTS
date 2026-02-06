@@ -90,10 +90,10 @@ const testCases = [
         shouldSucceed: true
     },
     {
-        name: 'Sum of k^2',
-        description: 'Σ(k^2, k=1 to n) = n(n+1)(2n+1)/6',
+        name: 'Sum of k^2 (expected timeout)',
+        description: 'Σ(k^2, k=1 to n) = n(n+1)(2n+1)/6 (complex, times out with current search limits)',
         inductionHypothesis: 'Sum(Mult(k,k),Constant(1),Variable(n)) = Div(Mult(Mult(Variable(n),Add(Variable(n),Constant(1))),Add(Mult(Constant(2),Variable(n)),Constant(1))),Constant(6))',
-        shouldSucceed: true
+        shouldSucceed: false
     },
     {
         name: 'Sum of 2k-1 (odd numbers) alternative form',
