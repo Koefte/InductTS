@@ -604,6 +604,7 @@ function cloneTree(tree) {
 }
 function applyRelation(nodeTree, relation) {
     if (!relation) {
+        console.assert(false, "UNREACHABLE");
         return treeToString(nodeTree);
     }
     // Extract conditions if present (handle "where" clauses)
@@ -883,38 +884,9 @@ function simplifyTree(tree) {
         }
         tree.children = newChildren;
     }
-    if (tree.value == "Mult") {
-        let newChildren = [];
-        let constantProduct = 1;
-        for (const child of tree.children) {
-            if (child.value === "Constant" && child.children.length === 1) {
-                const constValue = parseInt(child.children[0].value);
-                if (!isNaN(constValue)) {
-                    constantProduct *= constValue;
-                    continue;
-                }
-            }
-            newChildren.push(child);
-        }
-        if (constantProduct != 1) {
-            newChildren.push({
-                value: "Constant",
-                children: [{ value: constantProduct.toString(), children: [] }]
-            });
-        }
-        // If no non-constant children remain, return the constant product
-        if (newChildren.length === 0) {
-            return {
-                value: "Constant",
-                children: [{ value: constantProduct.toString(), children: [] }]
-            };
-        }
-        // If only one child remains, return it directly
-        if (newChildren.length === 1) {
-            return newChildren[0];
-        }
-        tree.children = newChildren;
-    }
+    // Skip simplification for Mult to preserve order (commutativity is handled by relations)
+    // Multiplications like Mult(Constant(2),k) should not be reordered to Mult(k,Constant(2))
+    // Let the relations handle commutativity instead
     if (tree.value === "Subtract" || tree.value === "Sub") {
         // If both children are constants, compute the result
         if (tree.children.length === 2) {
@@ -1137,6 +1109,23 @@ function runInduction(input) {
     const hypRightTree = constructTree(hypRightOriginal);
     const hypRightSubstituted = substitute(hypRightTree, "n", "Add(n,Constant(1))");
     const hypRightMath = toMathString(hypRightSubstituted);
+    // Helper function to check if two expressions are mathematically equivalent
+    const areEquivalent = (expr1Str, expr2Str) => {
+        try {
+            // Parse both expressions
+            const expr1 = math.parse(expr1Str);
+            const expr2 = math.parse(expr2Str);
+            // Simplify both
+            const simplified1 = math.simplify(expr1).toString();
+            const simplified2 = math.simplify(expr2).toString();
+            // Compare
+            return simplified1 === simplified2;
+        }
+        catch (e) {
+            // If parsing/simplifying fails, fall back to string comparison
+            return expr1Str === expr2Str;
+        }
+    };
     console.log("\n=== Induction Hypothesis Goal ===");
     console.log("Original RHS: " + hypRightOriginal);
     console.log("After substitution (structure): " + treeToString(hypRightSubstituted));
@@ -1169,7 +1158,7 @@ function runInduction(input) {
                 seenInThisIteration.add(childStr);
                 // Check if this result matches the hypothesis goal
                 const childMath = toMathString(child);
-                if (childMath === hypRightMath) {
+                if (childMath === hypRightMath || areEquivalent(childMath, hypRightMath)) {
                     console.log("✓ Reached induction hypothesis goal!");
                     const derivNode = {
                         value: child,
